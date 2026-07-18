@@ -346,7 +346,7 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
         self.model_ = TabICL(**config)
         self.model_config_ = config
         self.model_.load_state_dict(checkpoint["state_dict"])
-        self.model_.eval()
+        self.model_.eval() # 加载后模型设置为 eval() 模式（不计算梯度）
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> TabICLRegressor:
         """Fit the regressor to training data.
@@ -377,16 +377,17 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
             Fitted regressor instance.
         """
 
-        if y is None:
+        if y is None: # 回归任务必须提供目标值 y（不像某些无监督方法）
             raise ValueError("This regressor requires y to be passed, but the target y is None.")
 
+        # 调用 sklearn 的数据验证工具，确保 X 和 y 的样本数一致、没有全 NaN 列等
         X, y = validate_data(self, X, y, dtype=None, skip_check_array=True)
 
         # Ensure y is numeric
-        y = np.asarray(y, dtype=np.float32)
+        y = np.asarray(y, dtype=np.float32) # 强制将 y 转为 float32 数组，确保后续数值计算的兼容性
 
         # Warn and flatten 2D column-vector y
-        if y.ndim == 2 and y.shape[1] == 1:
+        if y.ndim == 2 and y.shape[1] == 1: # 如果 y 是列向量 (n, 1)，展平为 (n,)。这是 sklearn 的标准兼容性处理
             from sklearn.exceptions import DataConversionWarning
 
             warnings.warn(
@@ -401,34 +402,36 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
         self._resolve_device()
 
         # Inference configuration
-        self.n_samples_in_ = _num_samples(X)
-        self._build_inference_config()
+        self.n_samples_in_ = _num_samples(X) # 记录训练样本数，后续用于 AMP/FA3 的自动策略判断
+        self._build_inference_config() # 构建 InferenceConfig 对象，包含三个 transformer（COL、ROW、ICL）的推理配置
 
         # Load the pre-trained TabICL model
-        self._load_model()
-        self.model_.to(self.device_)
+        self._load_model() # 加载预训练的 TabICL 模型
+        self.model_.to(self.device_) # 将模型参数移到目标设备（GPU/CPU）
 
         # Scale target values
-        self.y_scaler_ = StandardScaler()
+        self.y_scaler_ = StandardScaler() # StandardScaler 计算均值 μ 和标准差 σ，然后 y_scaled = (y - μ) / σ
         y_scaled = self.y_scaler_.fit_transform(y.reshape(-1, 1)).flatten()
 
         # Transform input features
         self.X_encoder_ = TransformToNumerical(verbose=self.verbose)
-        X = self.X_encoder_.fit_transform(X)
+        X = self.X_encoder_.fit_transform(X) # 若数据存在非数值类型，会学习映射为数值的规则，再使用此规则执行转换，内部其实是.fit().transform()链式调用
 
         # Fit ensemble generator to create multiple dataset views
+        # EnsembleGenerator 是 TabICL 提升预测质量的核心机制。它通过创建多个不同视角的数据视图来做集成预测
         self.ensemble_generator_ = EnsembleGenerator(
-            classification=False,
-            n_estimators=self.n_estimators,
-            norm_methods=self.norm_methods or ["none", "power"],
-            feat_shuffle_method=self.feat_shuffle_method,
-            outlier_threshold=self.outlier_threshold,
-            random_state=self.random_state,
+            classification=False, # 回归任务
+            n_estimators=self.n_estimators, # 集成成员数量，默认8
+            norm_methods=self.norm_methods or ["none", "power"], # 归一化方法
+            feat_shuffle_method=self.feat_shuffle_method, # 特征排列策略，默认"latin"
+            outlier_threshold=self.outlier_threshold, # 异常值阈值，默认4.0
+            random_state=self.random_state, # 随机种子，默认42
         )
-        self.ensemble_generator_.fit(X, y_scaled)
+        self.ensemble_generator_.fit(X, y_scaled) # fit过程：为每种归一化方法拟合预处理器（记录训练数据的统计量），供后续 transform() 使用
 
         self.model_kv_cache_ = None
-        if self.kv_cache:
+        if self.kv_cache: # kv cache 可选加速
+            # 当 kv_cache=True，fit 阶段会预先计算训练数据的 Key-Value 投影并缓存，这样 predict 时就不需要重复处理训练数据，大幅加速推理
             if self.kv_cache is True or self.kv_cache == "kv":
                 self.cache_mode_ = "kv"
             elif self.kv_cache == "repr":
@@ -441,37 +444,48 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
 
     def _build_kv_cache(self) -> None:
         """Pre-compute KV caches for training data across all ensemble batches."""
+        
+        # _build_kv_cache 将训练数据通过已拟合的 EnsembleGenerator 转换为所有集成变体视图，
+        # 然后逐批送入 TabICL 模型前向传播，把每层 Transformer 对训练样本计算出的 Key-Value 投影缓存下来，
+        # 后续 predict 时测试数据可复用这些缓存，避免对训练数据的重复计算，从而大幅加速推理
 
         # X=None is required in transform() even though it is the default value
         # because sklearn's _SetOutputMixin wraps transform() with a signature
         # that enforces X as a positional argument.
-        train_data = self.ensemble_generator_.transform(X=None, mode="train")
-        self.model_kv_cache_ = OrderedDict()
+        # mode="train"：要求 EnsembleGenerator 只返回训练数据的集成视图（不包含测试数据），数据已经过对应的 PreprocessingPipeline 预处理
+        train_data = self.ensemble_generator_.transform(X=None, mode="train") # 获取每种归一化方法下的训练数据视图
+        # 结构：{norm_method: TabICLCache}，每种归一化方法对应一个独立的缓存，因为不同归一化方法的预处理输出不同，KV 投影也不同
+        self.model_kv_cache_ = OrderedDict() # 初始化缓存字典
 
+        # 对每种归一化方法（如 "none", "power"），分别构建其 KV 缓存
         for norm_method, (Xs, ys) in train_data.items():
-            batch_size = self.batch_size or Xs.shape[0]
-            n_batches = int(np.ceil(Xs.shape[0] / batch_size))
-            Xs_split = np.array_split(Xs, n_batches)
+            # 分批策略，避免 OOM
+            batch_size = self.batch_size or Xs.shape[0] # 确定批次大小，若用户设batch_size则用它，否则把所有变体一次处理
+            n_batches = int(np.ceil(Xs.shape[0] / batch_size)) # 计算需要多少个批次
+            Xs_split = np.array_split(Xs, n_batches) # 沿第 0 维（变体维度）均匀切分
             ys_split = np.array_split(ys, n_batches)
 
+            # 逐批前向传播并缓存
             caches = []
             for X_batch, y_batch in zip(Xs_split, ys_split):
                 X_batch = torch.from_numpy(X_batch).float().to(self.device_)
                 y_batch = torch.from_numpy(y_batch).float().to(self.device_)
-                with torch.no_grad():
+                # 前向传播，存储 KV cache
+                with torch.no_grad(): # 禁用梯度计算。因为是推理阶段，不需要计算梯度，节省显存和计算量
+                    # 核心调用
                     self.model_.predict_stats_with_cache(
                         X_train=X_batch,
                         y_train=y_batch,
-                        use_cache=False,
-                        store_cache=True,
-                        cache_mode=self.cache_mode_,
+                        use_cache=False, # 不使用已有缓存（因为现在是构建缓存）
+                        store_cache=True, # 将计算结果存到 self.model_._cache
+                        cache_mode=self.cache_mode_, # 缓存策略 kv或repr
                         inference_config=self.inference_config_,
                     )
                 caches.append(self.model_._cache)
-                self.model_.clear_cache()
+                self.model_.clear_cache() # 清除模型内部缓存，避免下一批追加到错误的缓存上
 
             # Merge all batch caches into a single cache
-            self.model_kv_cache_[norm_method] = TabICLCache.concat(caches)
+            self.model_kv_cache_[norm_method] = TabICLCache.concat(caches) # 合并所有批次的缓存
 
     def _batch_forward(
         self,
@@ -516,6 +530,10 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
         output_type = [output_type] if isinstance(output_type, str) else output_type
         results = {key: [] for key in output_type}
 
+        # 这里 X_batch 包含训练+测试数据，y_batch 是训练标签。模型内部会：
+        # 列级嵌入：(B, n_train+n_test, H) → (B, n_train+n_test, H+C, E)
+        # 行级交互：→ (B, n_train+n_test, C*E)
+        # ICL 预测：用训练部分作为上下文，预测测试部分
         for X_batch, y_batch in zip(Xs, ys):
             X_batch = torch.from_numpy(X_batch).float().to(self.device_)
             y_batch = torch.from_numpy(y_batch).float().to(self.device_)
@@ -583,14 +601,14 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
         results = {key: [] for key in output_type}
 
         offset = 0
-        for X_batch in Xs_split:
+        for X_batch in Xs_split: # 分批处理避免 OOM
             bs = X_batch.shape[0]
-            cache_subset = kv_cache.slice_batch(offset, offset + bs)
+            cache_subset = kv_cache.slice_batch(offset, offset + bs) # 从 cache 中切出当前 batch 对应的子集
             offset += bs
 
             X_batch = torch.from_numpy(X_batch).float().to(self.device_)
             with torch.no_grad():
-                out = self.model_.predict_stats_with_cache(
+                out = self.model_.predict_stats_with_cache( # 关键：predict_stats_with_cache 只需处理测试数据，训练数据的 K/V 投影从 cache 直接读取
                     X_test=X_batch,
                     output_type=output_type,
                     alphas=alphas,
@@ -661,13 +679,16 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
             If ``output_type`` is a list of str, returns a dictionary with keys as
             specified in the list and values as the corresponding predictions.
         """
-        check_is_fitted(self)
+        check_is_fitted(self) # 检查确保已经调用过 fit()
         if isinstance(X, np.ndarray) and len(X.shape) == 1:
             # Reject 1D arrays to maintain sklearn compatibility
             raise ValueError("The provided input X is one-dimensional. Reshape your data.")
 
         # Check if prediction is possible
+        # 预测需要训练数据作为上下文（ICL 的核心），有两种方式：kv cache和训练数据，两者都没有则无法预测（可能序列化时排除了训练数据和 cache）
+        # KV Cache：fit 时预计算了训练数据的 KV 投影
         has_kv_cache = hasattr(self, "model_kv_cache_") and self.model_kv_cache_ is not None
+        # 训练数据：ensemble_generator_ 中保存了原始训练数据
         has_training_data = (
             hasattr(self, "ensemble_generator_") and getattr(self.ensemble_generator_, "X_", None) is not None
         )
@@ -679,34 +700,37 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
                 "save_kv_cache=True."
             )
 
+        # 线程配置（CPU 推理优化），在 CPU 推理时控制 PyTorch 的线程数，注：函数结束时会恢复原始线程数
         if self.n_jobs is not None:
             assert self.n_jobs != 0
             old_n_threads = torch.get_num_threads()
             n_logical_cores = mp.cpu_count()
 
-            if self.n_jobs > 0:
+            if self.n_jobs > 0: # 使用指定数量的线程（上限为逻辑核心数）
                 if self.n_jobs > n_logical_cores:
                     warnings.warn(
                         f"TabICL got n_jobs={self.n_jobs} but there are only {n_logical_cores} logical cores available."
                         f" Only {n_logical_cores} threads will be used."
                     )
                 n_threads = min(n_logical_cores, self.n_jobs)
-            else:
+            else: # 比如-1 时 = 使用全部核心
                 n_threads = max(1, n_logical_cores + 1 + self.n_jobs)
 
             torch.set_num_threads(n_threads)
 
         # Preserve DataFrame structure to retain column names and types for correct feature transformation
-        X = validate_data(self, X, reset=False, dtype=None, skip_check_array=True)
+        X = validate_data(self, X, reset=False, dtype=None, skip_check_array=True) # reset=False不重置已 fit 的属性，只验证特征数一致性
 
         # Detect all-NaN columns (used by SHAP's feature masking approach)
-        if hasattr(X, "columns"):  # check for dataframe without importing pandas
+        # feature_mask 是布尔数组，True 表示该列全为 NaN（被掩码）
+        if hasattr(X, "columns"):  # check for dataframe without importing pandas  有columns属性说明是DataFrame
+            # isna检查每个位置是否为NaN → 布尔矩阵 (n, m)；all(axis=0)沿行方向，检查每列是否全为True → (m,)
             feature_mask = X.isna().all(axis=0).to_numpy()
         else:
             arr = np.asarray(X)
-            if np.issubdtype(arr.dtype, np.number):
+            if np.issubdtype(arr.dtype, np.number): # 是NumPy数值类型
                 feature_mask = np.isnan(arr).all(axis=0)
-            else:
+            else: # 是NumPy对象数组（混合类型/字符串）
                 # object dtype: v != v is True only for NaN in IEEE 754, safe for strings too
                 feature_mask = np.array([all(v != v for v in arr[:, i]) for i in range(arr.shape[1])])
 
@@ -714,27 +738,40 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
             feature_mask = None
 
         # Fill masked columns so that transformers don't choke on NaN
-        if feature_mask is not None:
+        if feature_mask is not None: # 将全 NaN 列填充为 0，防止后续 sklearn transformer 报错
             if hasattr(X, "columns"):  # Proxy way to check whether X is a dataframe
                 X.iloc[:, feature_mask] = 0.0
             else:
                 X[:, feature_mask] = 0.0
 
-        X = self.X_encoder_.transform(X)
+        X = self.X_encoder_.transform(X) # 使用 fit 时拟合的 TransformToNumerical 对测试数据做相同变换
 
+        # 输出类型标准化。统一转为列表，方便后续处理多种输出类型
         output_type = [output_type] if isinstance(output_type, str) else list(output_type)
 
+        # 集成推理（核心分支）
+
         # Skip KV cache when features are masked
+        # 这一行重复前面的，其实多余，第一次用于检查能否预测，第二次(即这一行)用于决定是否使用 cache
         has_kv_cache = hasattr(self, "model_kv_cache_") and self.model_kv_cache_ is not None
         use_cache = has_kv_cache and feature_mask is None
 
         if use_cache:
+            # X (n_test, n_features)
+            # ↓ ensemble_generator_.transform(mode="test") 为每种 norm_method 生成特征排列视图
+            # OrderedDict {
+            #   "none":  (Xs_test: [n_estimators, n_test, n_features],),
+            #   "power": (Xs_test: [n_estimators, n_test, n_features],),
+            # }
+            # ↓ 对每种 norm_method: 取出对应的 kv_cache（fit 时预计算的训练数据 KV 投影）
+            # _batch_forward_with_cache(Xs_test, kv_cache) → 只前向传播测试数据，复用训练数据的 cache
+
             # Cache exists: forward only test data and use the pre-computed cache for training data
-            test_data = self.ensemble_generator_.transform(X, mode="test")
+            test_data = self.ensemble_generator_.transform(X, mode="test") # 只处理测试数据，生成每种 norm_method 的特征排列视图
             results = {key: [] for key in output_type}
             for norm_method, (Xs_test,) in test_data.items():
-                kv_cache = self.model_kv_cache_[norm_method]
-                batch_out = self._batch_forward_with_cache(Xs_test, kv_cache, output_type=output_type, alphas=alphas)
+                kv_cache = self.model_kv_cache_[norm_method] # 取出预计算缓存
+                batch_out = self._batch_forward_with_cache(Xs_test, kv_cache, output_type=output_type, alphas=alphas) # 只前向测试数据
                 if isinstance(batch_out, dict):
                     for key in output_type:
                         results[key].append(batch_out[key])
@@ -742,7 +779,7 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
                     results[output_type[0]].append(batch_out)
         else:
             # No cache or masked features: forward both training and test data
-            data = self.ensemble_generator_.transform(X, mode="both", feature_mask=feature_mask)
+            data = self.ensemble_generator_.transform(X, mode="both", feature_mask=feature_mask) # mode="both" 返回训练 + 测试数据拼接后的视图
             results = {key: [] for key in output_type}
             for Xs, ys in data.values():
                 batch_out = self._batch_forward(Xs, ys, output_type=output_type, alphas=alphas)
@@ -752,26 +789,30 @@ class TabICLRegressor(RegressorMixin, TabICLBaseEstimator):
                 else:
                     results[output_type[0]].append(batch_out)
 
+        # 反标准化与集成平均
         # Concatenate across ensemble members and apply inverse transform
         final_results = {}
         for key in output_type:
-            arr = np.concatenate(results[key], axis=0)
+            arr = np.concatenate(results[key], axis=0) # 拼接所有 norm_method 的预测结果
             n_estimators = arr.shape[0]
             n_samples = arr.shape[1]
 
             if arr.ndim == 2:
                 # mean, variance, or median: (n_estimators, n_samples)
                 arr = self.y_scaler_.inverse_transform(arr.reshape(-1, 1)).reshape(n_estimators, n_samples)
-                final_results[key] = np.mean(arr, axis=0)
+                # 将标准化空间的预测还原到原始尺度：y = y_scaled × σ + μ，其中 σ 和 μ 是 fit 时 StandardScaler 计算的标准差和均值
+                final_results[key] = np.mean(arr, axis=0) # 所有集成成员取平均 → 最终预测
             else:
                 # quantiles: (n_estimators, n_samples, n_quantiles)
                 n_quantiles = arr.shape[2]
                 arr = self.y_scaler_.inverse_transform(arr.reshape(-1, 1)).reshape(n_estimators, n_samples, n_quantiles)
                 final_results[key] = np.mean(arr, axis=0)
 
+        # 恢复 PyTorch 原始线程数
         if self.n_jobs is not None:
             torch.set_num_threads(old_n_threads)
 
+        # 单一输出类型 → 直接返回数组；多种输出类型 → 返回字典
         if len(output_type) == 1:
             return final_results[output_type[0]]
 

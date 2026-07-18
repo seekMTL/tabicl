@@ -110,6 +110,9 @@ class SkippableLinear(nn.Linear):
         Value used to mark inputs that should be skipped.
     """
 
+    # 在处理表格数据时，样本的特征数量和排列方式可能不同。
+    # skip_value（默认 -100）用作填充标记，表示"这里没有实际的特征值，只是为了让张量形状对齐的占位符
+
     def __init__(self, in_features: int, out_features: int, bias: bool = True, skip_value: float = -100.0):
         super().__init__(in_features, out_features, bias)
         self.skip_value = skip_value
@@ -129,10 +132,10 @@ class SkippableLinear(nn.Linear):
             to skipped inputs are filled with ``skip_value``.
         """
 
-        out = F.linear(src, self.weight, self.bias)
-        skip_mask = (src == self.skip_value).all(dim=-1)
-        if skip_mask.any():
-            out[skip_mask] = self.skip_value
+        out = F.linear(src, self.weight, self.bias) # 正常做线性变换
+        skip_mask = (src == self.skip_value).all(dim=-1) # 找出原始输入里全是 skip_value 的占位行
+        if skip_mask.any(): # 若存在至少一个占位行
+            out[skip_mask] = self.skip_value # 把占位行的输出改回 skip_value
 
         return out
 
@@ -181,10 +184,19 @@ class MultiheadAttention(nn.MultiheadAttention):
            https://arxiv.org/abs/2501.19399
     """
 
+    # 此类是继承 PyTorch 的 nn.MultiheadAttention，在此基础上增加了三种增强能力：
+    # RoPE：旋转位置编码，用旋转矩阵编码位置信息
+    # SSMax：可学习的注意力缩放，防止长序列注意力分数退化
+    # KV Cache：推理优化；缓存 Key/Value 投影，避免重复计算
+    #   为什么可以缓存：因为投影是可并行的线性变换 K = X · Wk、V = X · Wv。如果训练数据的表示不变，预计算一次，
+    #   后续测试样本只需计算 Q = X_test · Wq，然后执行 Attention(Q, K_cached, V_cached)
+
     def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, ssmax: Union[bool, str] = False):
+        # 调用父类构造函数，batch_first=True 表示输入形状为 (batch, seq, dim)
         super().__init__(embed_dim, num_heads, dropout, batch_first=True)
         if isinstance(ssmax, bool):
             ssmax = "qassmax-mlp-elementwise" if ssmax else "none"
+        # 工厂函数创建 SSMax 层
         self.ssmax_layer = create_ssmax_layer(ssmax_type=ssmax, num_heads=num_heads, embed_dim=embed_dim)
 
     def forward(
@@ -249,21 +261,24 @@ class MultiheadAttention(nn.MultiheadAttention):
                 - v: shape (..., num_heads, src_len, head_dim)
         """
 
+        # F._canonical_mask 是 PyTorch 内部函数，_ 前缀表示这是 PyTorch 内部 API，将各种格式的 mask 统一为 float 类型张量，方便后续注意力计算使用
+        # 第一次：key_padding_mask 与 attn_mask 对齐
         key_padding_mask = F._canonical_mask(
-            mask=key_padding_mask,
-            mask_name="key_padding_mask",
-            other_type=F._none_or_dtype(attn_mask),
-            other_name="src_mask",
-            target_type=query.dtype,
+            mask=key_padding_mask, # 输入的 mask（可能是 None、bool 或 float 张量）
+            mask_name="key_padding_mask", # mask 的名字，用于报错信息
+            other_type=F._none_or_dtype(attn_mask), # 另一个 mask 的 dtype，用于对齐
+            other_name="src_mask", # 另一个 mask 的名字
+            target_type=query.dtype, # 目标 dtype（通常是 query 的 dtype）
         )
 
+        # 第二次：attn_mask 单独规范化
         attn_mask = F._canonical_mask(
             mask=attn_mask,
             mask_name="attn_mask",
             other_type=None,
             other_name="",
             target_type=query.dtype,
-            check_other=False,
+            check_other=False, # 是否检查与另一个 mask 的一致性
         )
 
         return multi_head_attention_forward(
@@ -330,6 +345,10 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
         - "qassmax-mlp-elementwise": Elementwise query-aware scaling.
     """
 
+    # 这是一个基于标准的 Transformer Encoder Block的改进，核心公式为：
+    # Pre-Norm (norm_first=True):  
+    #   x = x + Attn(Norm1(x)) --> x = x + FFN(Norm2(x))
+
     def __init__(
         self,
         d_model: int,
@@ -349,14 +368,14 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
             self.norm2 = nn.LayerNorm(d_model, bias=False)
 
         del self.self_attn
-        self.attn = MultiheadAttention(d_model, nhead, dropout, ssmax)
+        self.attn = MultiheadAttention(d_model, nhead, dropout, ssmax) # 使用增强版的MultiheadAttention替换父类的标准版
         self.init_weights()
 
     def init_weights(self):
         """Initialize projection layers to zero for stable training."""
-        nn.init.zeros_(self.attn.out_proj.weight)
+        nn.init.zeros_(self.attn.out_proj.weight) # Attention 输出投影初始化为0
         nn.init.zeros_(self.attn.out_proj.bias)
-        nn.init.zeros_(self.linear2.weight)
+        nn.init.zeros_(self.linear2.weight) # FFN 输出投影初始化0
         nn.init.zeros_(self.linear2.bias)
 
     def forward(
@@ -428,30 +447,36 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
         """
 
         if train_size is None:
+            # 普通模式 (train_size=None)：若 k/v 未提供，默认使用 q 做自注意力(Self-Attention)；如果提供了，就是交叉注意力(Cross-Attention)
             k = q if k is None else k
             v = q if v is None else v
         else:
+            # train_size 模式：将 q 的前 train_size 个位置作为 K/V，完整 q 作为 Query。这在 ICL 场景中用于确保 Query 可以看所有位置，但 Key/Value 只能来自训练样本
             assert k is None and v is None, "k and v must be None when train_size is provided"
             k = v = q[..., :train_size, :]
 
-        k_proj, v_proj = None, None
-        use_cache = cached_kv is not None
+        k_proj, v_proj = None, None # 初始化 K/V 投影返回值
+        use_cache = cached_kv is not None # 判断是否使用缓存
 
+        # norm_first默认True，采用 Pre-Norm 架构
         if self.norm_first:
             # Pre-norm: normalize first, then apply attention
-            q_normed = self.norm1(q)
-            if use_cache:
-                attn = self._attn_block(
+            q_normed = self.norm1(q) # 先对 Query 做 LayerNorm
+            if use_cache: # 使用缓存
+                attn = self._attn_block( # 只传 query，K/V 来自缓存
                     q_normed, cached_kv=cached_kv, key_padding_mask=key_padding_mask, attn_mask=attn_mask, rope=rope
                 )
             else:
                 if train_size is None:
+                    # 若 k 和 q 是同一个对象，复用 q_normed 避免重复归一化
                     k_normed = self.norm1(k) if k is not q else q_normed
+                    # 若 v 和 k 是同一个对象，继续复用
                     v_normed = self.norm1(v) if v is not k else k_normed
                 else:
+                    # train_size 模式下，直接截取 q_normed 的前 train_size 行
                     k_normed = v_normed = q_normed[..., :train_size, :]
 
-                attn_result = self._attn_block(
+                attn_result = self._attn_block( # 调用底层注意力计算
                     q_normed,
                     k_normed,
                     v_normed,
@@ -461,13 +486,14 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
                     need_kv=need_kv,
                 )
 
+                # 解析返回值
                 if need_kv and isinstance(attn_result, tuple):
-                    attn, k_proj, v_proj = attn_result
+                    attn, k_proj, v_proj = attn_result # 拆包成 3 个值
                 else:
-                    attn = attn_result
+                    attn = attn_result # 单纯的 attention 输出
 
-            x = q + attn
-            x = x + self._ff_block(self.norm2(x))
+            x = q + attn # 第一个残差连接,注意是用原始的 q，不是归一化后的 q_normed
+            x = x + self._ff_block(self.norm2(x)) # Norm → FFN → 残差
         else:
             # Post-norm: attention first, then normalize
             if use_cache:
@@ -503,6 +529,7 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
         rope: Optional[RotaryEmbedding] = None,
         need_kv: bool = False,
     ) -> Union[Tensor, Tuple[Tensor, Tensor, Tensor]]:
+        # 对底层 MultiheadAttention.forward() 的薄封装，在 attention 输出后加一个 dropout
         result = self.attn(
             q,
             k,
@@ -515,10 +542,11 @@ class MultiheadAttentionBlock(nn.TransformerEncoderLayer):
         )
         if need_kv and isinstance(result, tuple):
             attn, k_proj, v_proj = result
-            return self.dropout1(attn), k_proj, v_proj
-        return self.dropout1(result)
+            return self.dropout1(attn), k_proj, v_proj # dropout 后返回三元组
+        return self.dropout1(result) # dropout 后返回
 
     def _ff_block(self, x: Tensor) -> Tensor:
+        # 标准的两层 FFN：Linear1 → Activation(GELU) → Dropout → Linear2 → Dropout2
         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
         return self.dropout2(x)
 
@@ -587,6 +615,13 @@ class InducedSelfAttentionBlock(nn.Module):
            Permutation-Invariant Neural Networks", ICML 2019
     """
 
+    # 普通的 self-attention 复杂度是 O(n²)（n = 序列长度）。SetTransformer 通过引入一组可学习的诱导点（inducing points） 将复杂度降为 O(n·m)，其中 m ≪ n（默认 m=16）
+    # 数据流（两阶段注意力）：Stage 1——信息压缩；Stage 2——信息传播
+    #   直观理解: 假设16个诱导点,诱导点像"信息摘要员"，先通读整个输入集合并压缩成16个摘要向量，然后每个原始输入元素再从这 16 个摘要中提取所需信息。这实现了置换不变性——无论输入元素如何排列，诱导点都会产生相同的摘要。
+    # forward_with_cache 方法支持推理加速，原理是缓存 Stage 2 中 hidden 的 K/V 投影：
+    #   store_cache 模式：运行完整的两阶段注意力，将 hidden 的 K/V 缓存起来
+    #   use_cache 模式：跳过 Stage 1，直接用缓存的 K/V 执行 Stage 2
+
     def __init__(
         self,
         d_model: int,
@@ -607,16 +642,18 @@ class InducedSelfAttentionBlock(nn.Module):
             ssmax = "qassmax-mlp-elementwise" if ssmax else "none"
 
         # Two-stage attention mechanism
+        # 第一级注意力：诱导点作为 Query，输入序列作为 Key/Value
         self.multihead_attn1 = MultiheadAttentionBlock(
             d_model, nhead, dim_feedforward, dropout, activation, norm_first, bias_free_ln, ssmax
         )
+        # 第二级注意力(无 SSMax)：输入序列作为 Query，第一级的输出作为 Key/Value
         self.multihead_attn2 = MultiheadAttentionBlock(
             d_model, nhead, dim_feedforward, dropout, activation, norm_first, bias_free_ln
         )
 
         # Learnable inducing points
-        self.num_inds = num_inds
-        self.ind_vectors = nn.Parameter(torch.empty(num_inds, d_model))
+        self.num_inds = num_inds # 从tabicl.py得出此处取128
+        self.ind_vectors = nn.Parameter(torch.empty(num_inds, d_model)) # 可学习的诱导点参数，形状(128, 128)
         nn.init.trunc_normal_(self.ind_vectors, std=0.02)
 
     def induced_attention(self, src: Tensor, train_size: Optional[int] = None) -> Tensor:
@@ -636,14 +673,17 @@ class InducedSelfAttentionBlock(nn.Module):
             Output tensor with same shape as input.
         """
 
+        # 扩展诱导点到与输入相同的 batch 形状
         *batch_shape, _, d_model = src.shape
         ind_vectors = self.ind_vectors.expand(*batch_shape, self.num_inds, d_model)
 
         if train_size is None:
-            hidden = self.multihead_attn1(ind_vectors, src, src)
+            hidden = self.multihead_attn1(ind_vectors, src, src) # 关注全部
         else:
+            # Stage 1: 诱导点关注输入序列（只关注训练部分）
             hidden = self.multihead_attn1(ind_vectors, src[..., :train_size, :], src[..., :train_size, :])
 
+        # Stage 2: 输入序列关注诱导点的输出
         out = self.multihead_attn2(src, hidden, hidden)
 
         return out
@@ -667,16 +707,17 @@ class InducedSelfAttentionBlock(nn.Module):
             Output tensor with same shape as input.
         """
 
+        # 检查每个 batch 样本的最后两维是否全为 -100
         skip_mask = (src == self.skip_value).all(dim=(-2, -1))  # batch shape
-        if skip_mask.any():
-            if skip_mask.all():
-                out = torch.full_like(src, self.skip_value)
+        if skip_mask.any(): # skip_mask里至少有一个 True，说明至少有一个占位符
+            if skip_mask.all(): # 全部都是 True，说明全部都是占位符
+                out = torch.full_like(src, self.skip_value) # 全都是占位符，直接返回 -100
             else:
                 out = torch.empty_like(src)
-                out[~skip_mask] = self.induced_attention(src[~skip_mask], train_size)
-                out[skip_mask] = self.skip_value
-        else:
-            out = self.induced_attention(src, train_size)
+                out[~skip_mask] = self.induced_attention(src[~skip_mask], train_size) # 只对正常样本做注意力
+                out[skip_mask] = self.skip_value # CLS token 输出重新设为 -100
+        else: # 没有占位符
+            out = self.induced_attention(src, train_size) # 全部正常计算
 
         return out
 
@@ -719,17 +760,24 @@ class InducedSelfAttentionBlock(nn.Module):
             Output tensor with same shape as input.
         """
 
+        # 缓存的不是隐藏向量本身，而是 hidden 经过投影后的 K/V：
+        # store_cache:
+        #   hidden (2, 7, 128, 128) → @Wk, @Wv → K_hidden, V_hidden → 存入缓存
+
+        # use_cache:
+        #   Q_test (2, 7, 1, 128) @Wq → 与缓存的 K_hidden, V_hidden 计算注意力
+
         *batch_shape, _, d_model = src.shape
         ind_vectors = self.ind_vectors.expand(*batch_shape, self.num_inds, d_model)
 
         if use_cache:
             assert block_idx in col_cache.kv, f"Cache miss for kv at ISAB {block_idx}"
-            out = self.multihead_attn2(src, cached_kv=col_cache.kv[block_idx])
+            out = self.multihead_attn2(src, cached_kv=col_cache.kv[block_idx]) # 跳过 Stage 1, 直接用缓存的 K/V
 
         if store_cache:
             assert train_size is not None, "train_size must be provided when store_cache=True"
             hidden = self.multihead_attn1(ind_vectors, src[..., :train_size, :], src[..., :train_size, :])
-            out, k_proj, v_proj = self.multihead_attn2(src, hidden, hidden, need_kv=True)
+            out, k_proj, v_proj = self.multihead_attn2(src, hidden, hidden, need_kv=True) # 缓存 hidden 的 K/V 投影
             col_cache.kv[block_idx] = KVCacheEntry(key=k_proj, value=v_proj)
 
         return out

@@ -268,6 +268,19 @@ class SetTransformer(nn.Module):
            Permutation-Invariant Neural Networks", ICML 2019
     """
 
+    # SetTransformer 是一个堆叠3个 Induced Self-Attention（诱导自注意力）机制的编码器，源自 Lee et al. 的论文 "Set Transformer: A Framework for Attention-based Permutation-Invariant Neural Networks" (ICML 2019)。
+    # 它的核心设计目标是高效处理可变大小的集合数据，同时保持置换不变性。
+    # Input: (..., seq_len, d_model)
+    #   ├── InducedSelfAttentionBlock #1
+    #   │     ├── Stage 1: 诱导点 ← 输入 (cross-attention)
+    #   │     └── Stage 2: 输入 ← 隐藏表示 (cross-attention)
+    #   ├── InducedSelfAttentionBlock #2
+    #   │     ...
+    #   ├── InducedSelfAttentionBlock #3
+    #   │     ...
+    #   ▼
+    # Output: (..., seq_len, d_model)   # 同形状输出
+
     def __init__(
         self,
         num_blocks: int,
@@ -290,17 +303,17 @@ class SetTransformer(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 InducedSelfAttentionBlock(
-                    d_model=d_model,
+                    d_model=d_model, # 从tabicl.py得出此处取128
                     nhead=nhead,
                     dim_feedforward=dim_feedforward,
-                    num_inds=num_inds,
+                    num_inds=num_inds, # 从tabicl.py得出此处取128
                     dropout=dropout,
                     activation=activation,
                     norm_first=norm_first,
                     bias_free_ln=bias_free_ln,
                     ssmax=ssmax,
                 )
-                for _ in range(num_blocks)
+                for _ in range(num_blocks) # 默认3个
             ]
         )
         self.recompute = recompute

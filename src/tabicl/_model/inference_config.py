@@ -62,6 +62,7 @@ class MgrConfig:
     - ``async_depth``: Max pending async copies before blocking.
     """
 
+    # 白名单(set 集合)：允许用户传哪些参数
     _ALLOWED_KEYS = {
         # General
         "device",
@@ -89,6 +90,7 @@ class MgrConfig:
         "use_async",
         "async_depth",
     }
+    # 类型规范(dict 字典)：每个参数的类型+默认值
     _TYPE_SPECS = {
         # General
         "device": {
@@ -102,7 +104,7 @@ class MgrConfig:
         # Batching
         "min_batch_size": {
             "expected_type": int,
-            "validator": lambda x: x >= 1,
+            "validator": lambda x: x >= 1, # lambda是Python的匿名函数（一次性小函数）。这里返回 x >= 1 的布尔值，用来校验参数值是否满足业务约束
             "error_msg": "min_batch_size must be an integer >= 1",
         },
         "safety_factor": {
@@ -197,7 +199,7 @@ class MgrConfig:
         if validator and not validator(value):
             raise ValueError(error_msg)
 
-        setattr(self, key, value)
+        setattr(self, key, value) # Python内置函数setattr(obj, name, value) 动态设置属性，其实等价于self.key = value，但注意不能这样写因为key和value都是变量，所以需要动态设置
 
     def __iter__(self):
         """Return iterator over allowed keys that have values set."""
@@ -368,4 +370,4 @@ class InferenceConfig:
             if key not in allowed_keys:
                 raise KeyError(f"Invalid config key: {key}. Allowed keys: {allowed_keys}")
 
-            getattr(self, key).update(config_dict[key])
+            getattr(self, key).update(config_dict[key]) # 动态获取，因为属性名存在变量key里

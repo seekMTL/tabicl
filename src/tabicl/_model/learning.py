@@ -91,8 +91,8 @@ class ICLearning(nn.Module):
         self.norm_first = norm_first
 
         self.tf_icl = Encoder(
-            num_blocks=num_blocks,
-            d_model=d_model,
+            num_blocks=num_blocks, # 默认12个 Transformer block
+            d_model=d_model, # 默认4*128=512
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
@@ -108,9 +108,13 @@ class ICLearning(nn.Module):
         if max_classes > 0:  # Classification
             self.y_encoder = OneHotAndLinear(max_classes, d_model)
         else:  # Regression
-            self.y_encoder = nn.Linear(1, d_model)
+            self.y_encoder = nn.Linear(1, d_model) # d_model默认= embed_dim(128) * row_num_cls(4)
 
-        self.decoder = nn.Sequential(nn.Linear(d_model, d_model * 2), nn.GELU(), nn.Linear(d_model * 2, out_dim))
+        self.decoder = nn.Sequential( # 是一个两层 MLP
+            nn.Linear(d_model, d_model * 2), # 512 → 1024
+            nn.GELU(), # 激活函数
+            nn.Linear(d_model * 2, out_dim) # 1024 → out_dim(回归默认是999，代表分位)
+        )
         self.inference_mgr = InferenceManager(enc_name="tf_icl", out_dim=out_dim)
 
     def _grouping(self, num_classes: int) -> tuple[Tensor, int]:
@@ -264,13 +268,14 @@ class ICLearning(nn.Module):
         if self.max_classes > 0:  # Classification
             Ry_train = self.y_encoder(y_train.float())
         else:  # Regression
-            Ry_train = self.y_encoder(y_train.unsqueeze(-1))
-        R[:, :train_size] = R[:, :train_size] + Ry_train
+            # 本质：将标量标签 y 编码为与行表示 R 同维度的向量，使得标签信息可以被"注入"到表示中
+            Ry_train = self.y_encoder(y_train.unsqueeze(-1)) # (B, train_size)->(B, train_size, 1), 经过y_encoder即全连接层变成(B, train_size, d_model) d_model默认512
+        R[:, :train_size] = R[:, :train_size] + Ry_train # 将标签嵌入加到训练样本的行表示上(原地修改)
 
-        src = self.tf_icl(R, train_size=train_size)
+        src = self.tf_icl(R, train_size=train_size) # ICL Transformer(12层)前向传播，关键参数train_size控制注意力掩码; 训练样本互看，测试样本只看训练
         if self.norm_first:
-            src = self.ln(src)
-        out = self.decoder(src)
+            src = self.ln(src) # Pre-Norm 架构的最后归一化
+        out = self.decoder(src) # 解码器MLP：Linear(512→1024) → GELU → Linear(1024→999)
 
         return out
 
@@ -316,13 +321,23 @@ class ICLearning(nn.Module):
                 If return_logits=False: Probabilities of shape (B, test_size, num_classes)
         """
 
+        # 子步骤 A：通过 InferenceManager 执行前向传播
+        # 内部流程：
+        # R: (B, T, D)  和  y_train: (B, train_size)
+        #          ↓
+        # InferenceManager 自动分批：
+        #   1. 解析形状：*batch_dims, seq_len, in_dim = R.shape → batch_dims = [B], seq_len = T, in_dim = D
+        #   2. 估算安全 batch size（基于 GPU 显存）
+        #   3. 将 B 拆分为多个小 batch
+        #   4. 每个小 batch 调用 _icl_predictions(R_batch, y_batch)
+        #   5. 拼接所有 batch 的输出
         out = self.inference_mgr(
             self._icl_predictions, inputs=OrderedDict([("R", R), ("y_train", y_train)]), auto_batch=auto_batch
         )
 
         train_size = y_train.shape[1]
         if self.max_classes == 0:
-            out = out[:, train_size:]
+            out = out[:, train_size:] # 子步骤 B：切分出测试部分的预测
         else:
             num_classes = len(torch.unique(y_train[0]))
             out = out[:, train_size:, :num_classes]
@@ -429,10 +444,10 @@ class ICLearning(nn.Module):
             to split the input into training and test data.
 
         return_logits : bool, default=True
-            If True, return logits instead of probabilities.
+            If True, return logits instead of probabilities. 回归时无用（仅分类用）
 
         softmax_temperature : float, default=0.9
-            Temperature for the softmax function.
+            Temperature for the softmax function. 回归时无用（仅分类用）
 
         mgr_config : MgrConfig, default=None
             Configuration for InferenceManager.
@@ -499,7 +514,7 @@ class ICLearning(nn.Module):
             Row representations of shape (B, T, D) where:
              - B is the number of tables
              - T is the number of samples (rows)
-             - D is the dimension of row representations
+             - D is the dimension of row representations D: 行表示维度 = C * E(CLS token 数 * 嵌入维度，默认4x128=512)
 
         y_train : Tensor
             Training targets of shape (B, train_size), where train_size is the position

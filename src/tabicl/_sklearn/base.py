@@ -135,6 +135,10 @@ class TabICLBaseEstimator(BaseEstimator):
         """
         use_amp, use_fa3 = self._resolve_amp_fa3()
 
+        # 下面是对用户传入配置和默认配置的处理，设计：
+        # 优先级：用户配置 > 默认配置；部分覆盖：用户只需传想改的参数，其他用默认值；统一输出：无论输入什么类型，最终都是 InferenceConfig 对象
+
+        # 默认配置
         init_config = {
             "COL_CONFIG": {
                 "device": self.device_,
@@ -147,15 +151,16 @@ class TabICLBaseEstimator(BaseEstimator):
             "ROW_CONFIG": {"device": self.device_, "use_amp": use_amp, "use_fa3": use_fa3, "verbose": self.verbose},
             "ICL_CONFIG": {"device": self.device_, "use_amp": use_amp, "use_fa3": use_fa3, "verbose": self.verbose},
         }
-        if self.inference_config is None:
-            self.inference_config_ = InferenceConfig()
-            self.inference_config_.update_from_dict(init_config)
-        elif isinstance(self.inference_config, dict):
+        # self.inference_config：用户传入的原始参数（无下划线后缀）；self.inference_config_：最终构建的配置对象（有下划线后缀）
+        if self.inference_config is None: # 情况1：用户没传
+            self.inference_config_ = InferenceConfig() # 创建空配置
+            self.inference_config_.update_from_dict(init_config) # 填入默认值
+        elif isinstance(self.inference_config, dict): # 情况2：是字典
             self.inference_config_ = InferenceConfig()
             for key, value in self.inference_config.items():
                 if key in init_config:
-                    init_config[key].update(value)
-            self.inference_config_.update_from_dict(init_config)
+                    init_config[key].update(value) # 把用户配置合并到默认配置init_config
+            self.inference_config_.update_from_dict(init_config) # 填充到新对象
         else:
             self.inference_config_ = self.inference_config
 

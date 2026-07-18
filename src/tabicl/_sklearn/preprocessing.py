@@ -76,6 +76,8 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
         - If input is not a DataFrame: a ``FunctionTransformer`` that passes data
           through unchanged.
     """
+    # 此类职责是将 DataFrame 中的非数值数据（分类、文本、布尔）转换为数值表示，因为机器学习模型只能处理数字
+    # DataFrame = pandas 的二维表格，带行索引和列名，每列可以不同类型，是数据科学中最常用的数据容器，类似于 Python 里的 Excel
 
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
@@ -98,12 +100,17 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
             Returns self.
         """
 
+        # 定义两种转换器
+        # 分类变量 → 整数，如["cat","dog","cat"] → [0, 1, 0]
         cat_tfm = OrdinalEncoder(
             dtype=np.int64, handle_unknown="use_encoded_value", unknown_value=-1, encoded_missing_value=-1
         )
+        # 填充缺失值（均值），如[1, NaN, 3] → [1, 2, 3]
         num_tfm = SimpleImputer()
 
+        # 检查是否是 DataFrame，然后定义合适的数据转换器
         if not hasattr(X, "columns"):  # proxy way to check whether X is a dataframe without importing pandas
+            # 逻辑：如果不是 DataFrame，必须是纯数值数组，否则报错，如果不报错说明是纯数值数组，则只需用 SimpleImputer
             # no dataframe, so we can't do column-wise transformations. Instead, we check if it's already numeric and if not, raise an error.
             
             # For compatibility with sklearn's tests
@@ -114,7 +121,7 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
                 )
             X_arr = np.asarray(X)
             try:
-                X_arr.astype(np.float64)
+                X_arr.astype(np.float64) # 尝试转为浮点数，若转换成功说明原数据全是数值，否则存在非数值
             except (ValueError, TypeError) as e:
                 # Preserve the original exception type so that, e.g., object arrays
                 # holding non-string/non-number elements still raise a TypeError.
@@ -124,13 +131,17 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
                     "If your data contains categorical or string columns, pass it as a pandas "
                     "DataFrame instead, so each column can be typed and preprocessed accordingly."
                 ) from None
-            self.tfm_ = num_tfm
+            self.tfm_ = num_tfm  # 只用 SimpleImputer，只需要填充缺失值
 
         else:
+            # DataFrame 输入处理（核心）
 
+            # 找出分类列（字符串、对象、类别、布尔）
             cat_cols = make_column_selector(dtype_include=["string", "object", "category", "boolean"])(X)
             cat_pos = [X.columns.get_loc(col) for col in cat_cols]
 
+            # 警告高基数分类列（遍历所有分类列，如果某一列的不同值超过 40 个，就标记为"高基数列"）
+            # 比如：性别列，只有2种情况，是低基数，直接用 0/1 编码；城市列可能10种，低基数，OrdinalEncoder 可以处理；而用户ID列，高基数，用简单编码会很稀疏，效果差
             high_cardinality_cols = [col for col in cat_cols if X[col].nunique() > 40]
             if high_cardinality_cols:
                 import warnings
@@ -141,15 +152,20 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
                     "e.g. Skrub's TableVectorizer for strings."
                 )
 
+            # 找出数值列
             numeric_cols = make_column_selector(dtype_include="number")(X)
             numeric_pos = [X.columns.get_loc(col) for col in numeric_cols]
 
+            # 创建列转换器
             self.tfm_ = ColumnTransformer(
                 transformers=[("categorical", cat_tfm, cat_pos), ("continuous", num_tfm, numeric_pos)]
-            )
+            ) # 分类列用 OrdinalEncoder、数值列用 SimpleImputer
 
+        # 执行拟合
+        # 作用：学习转换参数(OrdinalEncoder：学习所有唯一值到整数的映射，SimpleImputer：计算均值)
         self.tfm_.fit(X)
 
+        # 打印调试信息
         if self.verbose and hasattr(self.tfm_, "transformers_"):
             selected_cols = []
             for name, tfm, pos in self.tfm_.transformers_:
@@ -165,6 +181,7 @@ class TransformToNumerical(TransformerMixin, BaseEstimator):
         return self
 
     def transform(self, X):
+        # fit 学转换规则（哪些是分类列？哪些是数值列？映射关系是什么？），transform 用学到的规则执行转换
         """Transform features using the fitted transformer.
 
         Parameters
@@ -229,7 +246,7 @@ class UniqueFeatureFilter(TransformerMixin, BaseEstimator):
         self : object
             Returns self.
         """
-        X = validate_data(self, X)
+        X = validate_data(self, X) # 验证输入数据格式，也设置了self.n_features_in_ = X.shape[1]，即特征数量
 
         # If there are very few samples, keep all features
         if X.shape[0] <= self.threshold:
@@ -300,6 +317,8 @@ class OutlierRemover(TransformerMixin, BaseEstimator):
         :math:`\\mu + \\text{threshold} \\cdot \\sigma`.
     """
 
+    # OutlierRemover 使用两阶段 Z-score 方法来检测和裁剪异常值，并在 transform 时采用软裁剪（对数平滑）而非硬截断
+
     def __init__(self, threshold: float = 4.0):
         self.threshold = threshold
 
@@ -319,29 +338,39 @@ class OutlierRemover(TransformerMixin, BaseEstimator):
         self : OutlierRemover
             Returns self.
         """
-        X = validate_data(self, X)
+
+        # 一阶段（只用第一轮统计量）的问题：
+        # 第一轮：含异常值的均值可能被拉偏，某个异常值很大把均值拉高，，边界也跟着偏移，有些真正的异常值可能因为边界被拉高而漏掉
+        # 两阶段：
+        # 第一轮：粗略标记明显的异常值
+        # 第二轮：在排除异常值后重新计算，得到真正代表"正常数据"的统计量，边界更准确，对异常值的识别更可靠
+
+        X = validate_data(self, X) # 确保是 2D 数组；设置self.n_features_in_=特征数量
 
         # First stage: Identify outliers using initial statistics
-        self.means_ = np.nanmean(X, axis=0)
-        self.stds_ = np.nanstd(X, axis=0, ddof=1 if X.shape[0] > 1 else 0)
+        self.means_ = np.nanmean(X, axis=0) # 沿axis=0（跨所有样本）计算每列的均值，忽略NaN
+        # ddof=1（Delta Degrees of Freedom）：使用样本标准差（分母 n-1）而非总体标准差（分母 n），这是统计学的无偏估计，但若只1个样本，ddof=0，因为n-1=0会除零错误
+        self.stds_ = np.nanstd(X, axis=0, ddof=1 if X.shape[0] > 1 else 0) # 计算每列标准差
 
         # Ensure standard deviations are not zero
-        self.stds_ = np.maximum(self.stds_, 1e-6)
+        self.stds_ = np.maximum(self.stds_, 1e-6) # 防止标准差为零（当某列所有值相同时）
 
         # Create a clean copy with outliers replaced by NaN
-        X_clean = X.copy()
+        X_clean = X.copy() # 深拷贝一份数据，不直接修改原始 X
+        # 计算第一轮边界，两变量的 shape (n_features,)
         lower_bounds = self.means_ - self.threshold * self.stds_
         upper_bounds = self.means_ + self.threshold * self.stds_
 
         # Create masks for values outside bounds
-        lower_mask = X < lower_bounds[np.newaxis, :]
-        upper_mask = X > upper_bounds[np.newaxis, :]
-        outlier_mask = np.logical_or(lower_mask, upper_mask)
+        lower_mask = X < lower_bounds[np.newaxis, :] # 布尔矩阵，True 表该值 < 下界（过低异常）；np.newaxis等同None，在数组指定位置插入一个大小为 1 的新维度
+        upper_mask = X > upper_bounds[np.newaxis, :] # 过高异常
+        outlier_mask = np.logical_or(lower_mask, upper_mask) # np.logical_or逐元素的逻辑或运算, 合并两个方向的异常值检测，outlier_mask：True 表该位置是异常值（过高或过低）
 
         # Set outliers to NaN
-        X_clean[outlier_mask] = np.nan
+        X_clean[outlier_mask] = np.nan # 将所有异常值替换为 NaN，这样第二轮计算统计量时，这些异常值就被排除了
 
         # Second stage: Recompute statistics without outliers
+        # 重新计算均值和标准差，自动忽略 NaN 值
         self.means_ = np.nanmean(X_clean, axis=0)
         self.stds_ = np.nanstd(X_clean, axis=0, ddof=1 if X.shape[0] > 1 else 0)
 
@@ -377,10 +406,11 @@ class OutlierRemover(TransformerMixin, BaseEstimator):
         X_out : ndarray of shape (n_samples, n_features)
             Transformed array with clipped values.
         """
-        check_is_fitted(self)
-        X = validate_data(self, X, reset=False)
-        X = np.maximum(-np.log1p(np.abs(X)) + self.lower_bounds_, X)
-        X = np.minimum(np.log1p(np.abs(X)) + self.upper_bounds_, X)
+        check_is_fitted(self) # 确保 lower_bounds_ 等属性存在，即已fit
+        X = validate_data(self, X, reset=False) # 验证输入格式和特征数匹配
+        # 理解：越大的异常值被压缩得越狠，但非一刀切。是在原始值和基于边界的对数惩罚值之间取较优者（maximum 取上限、minimum 取下限），实现一种软裁剪——不是暴力截断，而是用对数函数平滑地拉回来
+        X = np.maximum(-np.log1p(np.abs(X)) + self.lower_bounds_, X) # -log(1+|x|) + L
+        X = np.minimum(np.log1p(np.abs(X)) + self.upper_bounds_, X) # log(1+|x|) + U
 
         return X
 
@@ -435,14 +465,15 @@ class CustomStandardScaler(TransformerMixin, BaseEstimator):
             Returns self.
         """
 
+        # 要求输入X必须是2D数组，若用户只传入一个特征的一维数组（比如单独一列数值），scikit-learn 会报错
         if len(X.shape) == 1:
             # If X is a 1D array, reshape it to 2D
-            X = X.reshape(-1, 1)
+            X = X.reshape(-1, 1) # -1：让 NumPy 自动推断这个维度的大小；第二个维度固定为 1（即 1 列）。即(n,)转为(n, 1)
 
         X = validate_data(self, X)
 
-        self.mean_ = np.mean(X, axis=0)
-        self.scale_ = np.std(X, axis=0) + self.epsilon
+        self.mean_ = np.mean(X, axis=0) # 沿着第0轴（即行方向，跨所有样本）计算每个特征的均值
+        self.scale_ = np.std(X, axis=0) + self.epsilon # 加上epsilon防止除零
 
         return self
 
@@ -459,16 +490,20 @@ class CustomStandardScaler(TransformerMixin, BaseEstimator):
         X_out : ndarray of shape (n_samples, n_features)
             Transformed array after scaling and clipping.
         """
+        #  将原始数据转为 Z-score 标准化数据，然后裁剪到 [clip_min, clip_max] 范围。
+
+        # 1D 向量检测与重塑
         if len(X.shape) == 1:
-            is_vector = True
+            is_vector = True # 表示输入X是 1D 向量
             X = X.reshape(-1, 1)
         else:
             is_vector = False
 
-        check_is_fitted(self)
-        X = validate_data(self, X, reset=False)
+        check_is_fitted(self) # 检查self.mean_和self.scale_是否存在，确保实例已经过fit()。否则直接调 transform，会抛出 NotFittedError
+        X = validate_data(self, X, reset=False) # 验证X是numpy数组格式；reset=False不重新计算 n_features_in_（因为那是 fit 阶段做的事），会检查特征数量是否与self.n_features_in_一致
 
-        X_scaled = (X - self.mean_) / self.scale_
+        X_scaled = (X - self.mean_) / self.scale_ # Z-score 标准化，利用 NumPy 的广播机制执行向量化计算
+        # 将缩放后的值限制在默认[-100, 100]，因为极端异常值经过 Z-score 后可能产生极大的绝对值（如 ±1000），可能导致后续归一化（PowerTransformer、QuantileTransformer）不稳定或数值溢出
         X_clipped = np.clip(X_scaled, self.clip_min, self.clip_max)
 
         return X_clipped.reshape(-1) if is_vector else X_clipped
@@ -486,15 +521,17 @@ class CustomStandardScaler(TransformerMixin, BaseEstimator):
         X_out : ndarray of shape (n_samples, n_features)
             Transformed array in original scale.
         """
+        # 将标准化后的数据还原到原始尺度。是 transform 的严格数学逆，但非精确可逆，因为被transform裁剪掉的值无法恢复
+
         if len(X.shape) == 1:
             is_vector = True
             X = X.reshape(-1, 1)
         else:
             is_vector = False
 
-        check_is_fitted(self)
-        X = validate_data(self, X, reset=False)
-        X_out = X * self.scale_ + self.mean_
+        check_is_fitted(self) # 确保已 fit
+        X = validate_data(self, X, reset=False) # 验证输入格式和特征数
+        X_out = X * self.scale_ + self.mean_ # 逆向计算
 
         return X_out.reshape(-1) if is_vector else X_out
 
@@ -674,6 +711,10 @@ class PreprocessingPipeline(TransformerMixin, BaseEstimator):
         recomputation.
     """
 
+    # PreprocessingPipeline 是一个将数值表格数据依次经过
+    # Z-score 标准化 → 分布归一化（可选 Power/Quantile/Robust）→ 对数软裁剪异常值 的三阶段预处理流水线，
+    # 目的是将任意分布的原始特征转换为均值约 0、接近正态、无极端值且数值稳定的表示，供下游 TabICL 模型直接使用
+
     def __init__(
         self, normalization_method: str = "power", outlier_threshold: float = 4.0, random_state: Optional[int] = None
     ):
@@ -701,13 +742,16 @@ class PreprocessingPipeline(TransformerMixin, BaseEstimator):
 
         # 1. Apply standard scaling
         self.standard_scaler_ = CustomStandardScaler()
-        X_scaled = self.standard_scaler_.fit_transform(X)
+        X_scaled = self.standard_scaler_.fit_transform(X) # Z-score标准缩放
 
         # 2. Apply normalization
+        # 此归一化阶段为了输出分布更接近正态的数据 X_normalized
         if self.normalization_method != "none":
             if self.normalization_method == "power":
+                # Yeo-Johnson 变换：使数据分布更接近正态分布（高斯分布），能处理正值和负值；standardize=True：变换后再做一次标准缩放
                 self.normalizer_ = PowerTransformer(method="yeo-johnson", standardize=True)
             elif self.normalization_method == "quantile":
+                # 将数据映射到正态分布，基于分位数（排序后按位置映射，对异常值更鲁棒）
                 self.normalizer_ = QuantileTransformer(output_distribution="normal", random_state=self.random_state)
             elif self.normalization_method == "quantile_rtdl":
                 self.normalizer_ = Pipeline(
@@ -724,16 +768,17 @@ class PreprocessingPipeline(TransformerMixin, BaseEstimator):
             else:
                 raise ValueError(f"Unknown normalization method: {self.normalization_method}")
 
+            # 保存训练数据Z-score标准化后的最值，shape (1, n_features)。用于transform阶段，若测试数据有训练时未出现的极端值导致归一化失败，用这个范围裁剪回退
             self.X_min_ = np.min(X_scaled, axis=0, keepdims=True)
             self.X_max_ = np.max(X_scaled, axis=0, keepdims=True)
-            X_normalized = self.normalizer_.fit_transform(X_scaled)
+            X_normalized = self.normalizer_.fit_transform(X_scaled) # 执行归一化
         else:
             self.normalizer_ = None
             X_normalized = X_scaled
 
         # 3. Handle outliers
         self.outlier_remover_ = OutlierRemover(threshold=self.outlier_threshold)
-        self.X_transformed_ = self.outlier_remover_.fit_transform(X_normalized)
+        self.X_transformed_ = self.outlier_remover_.fit_transform(X_normalized) # 异常值处理 软裁剪
 
         return self
 
@@ -753,18 +798,20 @@ class PreprocessingPipeline(TransformerMixin, BaseEstimator):
         check_is_fitted(self)
         X = validate_data(self, X, reset=False, copy=True)
         # Standard scaling
-        X = self.standard_scaler_.transform(X)
-        # Normalization
+        # 标准缩放，然后默认裁剪到 [-100, 100]
+        X = self.standard_scaler_.transform(X) # 关键：使用的是训练集的均值和标准差，不是测试集的！这确保了训练集和测试集经过相同的尺度变换
+        # Normalization 归一化（含异常保护）
         if self.normalizer_ is not None:
             try:
                 # this can fail in rare cases if there is an outlier in X that was not present in fit()
-                X = self.normalizer_.transform(X)
+                X = self.normalizer_.transform(X) # 使用 fit 阶段学到的归一化参数来转换测试数据
             except ValueError:
+                # 异常回退机制
                 # clip values to train min/max
-                X = np.clip(X, self.X_min_, self.X_max_)
-                X = self.normalizer_.transform(X)
+                X = np.clip(X, self.X_min_, self.X_max_) # 把超出训练集范围的测试值硬截断到训练集的 min/max 范围内
+                X = self.normalizer_.transform(X) # 裁剪后重新归一化
         # Outlier removal
-        X = self.outlier_remover_.transform(X)
+        X = self.outlier_remover_.transform(X) # 异常值软裁剪
 
         return X
 
@@ -795,6 +842,10 @@ class Shuffler:
     random_state : int or None, default=None
         Random seed for reproducible shuffling.
     """
+
+    # Shuffler 是一个纯粹的索引排列生成器，不接触任何数据，只根据指定的策略（默认Latin Square）生成一组特征或标签的重排索引模式，供 EnsembleGenerator 在创建集成变体时用来打乱列顺序或类别标签
+    # 主要输入：n_elements（有多少个元素需要打乱）、method（打乱策略），产出: List[np.ndarray]一个整数索引排列的列表
+    # 简言之，Shuffler 不处理原始输入数据 X，不关心你的数据长什么样，只是输出一堆索引
 
     def __init__(
         self,
@@ -836,32 +887,35 @@ class Shuffler:
         self.rng_ = random.Random(self.random_state)
         indices = list(range(self.n_elements))
 
+        # 默认的打乱方法是Latin，但需要处理大元素集的情况
         # Use the random method if n_elements exceeds the limit for Latin square
         if self.n_elements > self.max_elements_for_latin and self.method == "latin":
-            method = "random"
+            method = "random" # Latin Square 对大元素集计算复杂度太高，所以换成random方式
         else:
             method = self.method
 
-        # No shuffling
+        # No shuffling 无打乱情况
         if method == "none" or n_estimators == 1:
             shuffle_patterns = [indices]
             return shuffle_patterns
 
         # Generate permutations based on method
-        if method == "shift":
+        if method == "shift": # 生成所有可能的循环移位
             # All possible circular shifts
             shuffle_patterns = [indices[-i:] + indices[:-i] for i in range(self.n_elements)]
         elif method == "random":
             # Random permutations
             if self.n_elements <= 5:
-                all_perms = [list(perm) for perm in itertools.permutations(indices)]
+                # 小元素集：枚举所有排列，然后采样，保证随机排列不重复.总之当排列空间小时，穷举成本很低，但能保证每个集成成员用不同的配置
+                all_perms = [list(perm) for perm in itertools.permutations(indices)] # permutation生成所有排列
                 shuffle_patterns = self.rng_.sample(all_perms, min(n_estimators, len(all_perms)))
             else:
+                # 大元素集：直接生成随机排列，因为无法像小元素那样穷举，但相反其随机排列的可能更多，能取到重复的排列几乎为0
                 shuffle_patterns = [self.rng_.sample(indices, self.n_elements) for _ in range(n_estimators)]
         elif method == "latin":
             # Latin square permutations
             with RecursionLimitManager(100000):  # Set a higher recursion limit to avoid recursion error
-                shuffle_patterns = self._latin_squares()
+                shuffle_patterns = self._latin_squares() # Latin Square 特点：每行每列元素不重复
         else:
             raise ValueError(f"Unknown method: {method}. Use 'shift', 'random', 'latin', or 'none'.")
 
@@ -876,31 +930,33 @@ class Shuffler:
             List of permutations forming a Latin square.
         """
 
+        # Latin Square 是一个 n×n 的矩阵，其中每行每列都包含 1 到 n 的每个元素恰好一次
+
         def _shuffle_transpose_shuffle(matrix):
-            square = deepcopy(matrix)
-            self.rng_.shuffle(square)
-            trans = list(zip(*square))
-            self.rng_.shuffle(trans)
+            square = deepcopy(matrix) # 深拷贝，不修改原矩阵
+            self.rng_.shuffle(square) # 随机打乱行
+            trans = list(zip(*square)) # 转置（行变列）
+            self.rng_.shuffle(trans) # 随机打乱转置后的行
             return trans
 
         def _rls(symbols):
             n = len(symbols)
             if n == 1:
-                return [symbols]
+                return [symbols] # 基础情况：只有一个符号
             else:
-                sym = self.rng_.choice(symbols)
-                symbols.remove(sym)
-                square = _rls(symbols)
-                square.append(square[0].copy())
+                sym = self.rng_.choice(symbols) # 随机选择一个符号
+                symbols.remove(sym) # 从列表中移除
+                square = _rls(symbols) # 递归生成剩余符号的 Latin Square
+                square.append(square[0].copy()) # 复制第一行作为新行
                 for i in range(n):
-                    square[i].insert(i, sym)
+                    square[i].insert(i, sym) # 在第 i 行的第 i 个位置插入 sym
                 return square
 
         symbols = list(range(self.n_elements))
-        square = _rls(symbols)
-        shuffles = _shuffle_transpose_shuffle(square)
+        square = _rls(symbols) # 递归生成 Latin Square
+        shuffles = _shuffle_transpose_shuffle(square) # 随机变换
 
-        return [list(shuffle) for shuffle in shuffles]
+        return [list(shuffle) for shuffle in shuffles] # 转换为列表
 
 
 class EnsembleGenerator(TransformerMixin, BaseEstimator):
@@ -1032,6 +1088,7 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
         self : EnsembleGenerator
             Fitted generator.
         """
+        # 验证输入格式，X 转为 numpy ndarray，确保是 2D 数组，并设置 self.n_features_in_ = 特征数量
         validate_data(self, X, y)
 
         if self.norm_methods is None:
@@ -1051,7 +1108,7 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
 
         # override n_features_in_ to account for unique feature filtering
         self.n_features_in_ = X.shape[1]
-        if self.classification:
+        if self.classification: # 分类任务
             self.n_classes_ = len(np.unique(y))
 
         self.rng_ = random.Random(self.random_state)
@@ -1090,12 +1147,19 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
             classification or ``None`` patterns for regression.
         """
 
+        # 生成多样化的集成配置，包括：
+        # 1、特征打乱模式（feature shuffles）
+        # 2、类别标签打乱模式（class shuffles，仅分类任务）
+        # 3、按归一化方法分组
+
         # Generate feature shuffle patterns
-        feat_shuffler = Shuffler(
+        # 生成特征打乱模式
+        feat_shuffler = Shuffler( # 创建特征打乱器
             n_elements=self.n_features_in_, method=self.feat_shuffle_method, random_state=self.random_state
         )
-        X_shuffles = feat_shuffler.shuffle(self.n_estimators)
+        X_shuffles = feat_shuffler.shuffle(self.n_estimators) # 生成 n_estimators 个打乱模式
 
+        # 生成类别标签打乱模式
         if self.classification:
             # For classification, generate class shuffle patterns
             class_shuffler = Shuffler(
@@ -1103,27 +1167,58 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
             )
             y_patterns = class_shuffler.shuffle(self.n_estimators)
         else:
-            y_patterns = [None]
+            y_patterns = [None] # 回归任务不需要打乱
+
+        # 与归一化方法组合
 
         # Create configurations combining feature and target patterns
         shuffle_configs = list(itertools.product(X_shuffles, y_patterns))
         self.rng_.shuffle(shuffle_configs)
 
-        shuffle_norm_configs = list(itertools.product(shuffle_configs, self.norm_methods_))
-        shuffle_norm_configs = shuffle_norm_configs[: self.n_estimators]
+        shuffle_norm_configs = list(itertools.product(shuffle_configs, self.norm_methods_)) # 笛卡尔积：所有配置 × 所有归一化方法
+        shuffle_norm_configs = shuffle_norm_configs[: self.n_estimators] # 截取前 n_estimators 个
+
+        # 按归一化方法分组
 
         # Reorganize configs so that those with the same normalization method are grouped together
-        used_methods = list(set([config[1] for config in shuffle_norm_configs]))
+        used_methods = list(set([config[1] for config in shuffle_norm_configs])) # 获取使用的归一化方法列表
 
         ensemble_configs = OrderedDict()
         X_shuffle_dict = OrderedDict()
         y_pattern_dict = OrderedDict()
 
         for method in used_methods:
+            # 提取该方法下的所有配置
             shuffle_configs = [config[0] for config in shuffle_norm_configs if config[1] == method]
-            X_shuffle_dict[method] = [config[0] for config in shuffle_configs]
-            y_pattern_dict[method] = [config[1] for config in shuffle_configs]
-            ensemble_configs[method] = shuffle_configs
+            # 分离特征打乱和类别打乱
+            X_shuffle_dict[method] = [config[0] for config in shuffle_configs] # 特征模式
+            y_pattern_dict[method] = [config[1] for config in shuffle_configs] # 类别模式
+            ensemble_configs[method] = shuffle_configs # 完整配置
+
+        # n_features_in_ = 3 # 3 个特征  n_estimators = 4 # 4 个基学习器
+        # feat_shuffle_method = "latin"   norm_methods_ = ["none", "power"]
+        # classification = False # 回归任务
+        # 返回值可能示例：
+        # ensemble_configs = OrderedDict({
+        #     "none": [
+        #         ([2,1,0], None),    # 学习器1
+        #         ([0,2,1], None),    # 学习器3
+        #     ],
+        #     "power": [
+        #         ([2,1,0], None),    # 学习器2
+        #         ([0,2,1], None),    # 学习器4
+        #     ]
+        # })
+
+        # X_shuffle_dict = OrderedDict({
+        #     "none":  [[2,1,0], [0,2,1]],
+        #     "power": [[2,1,0], [0,2,1]]
+        # })
+
+        # y_pattern_dict = OrderedDict({
+        #     "none":  [None, None],
+        #     "power": [None, None]
+        # })
 
         return ensemble_configs, X_shuffle_dict, y_pattern_dict
 
@@ -1163,15 +1258,31 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
             Dictionary mapping normalization methods to data tuples.
         """
 
-        check_is_fitted(self, ["ensemble_configs_"])
+        # 根据 fit() 学到的配置，生成多样化的集成数据变体
+
+        check_is_fitted(self, ["ensemble_configs_"])  # 确保已 fit
         assert mode in ("both", "train", "test"), f"Invalid mode: {mode}"
 
+        # 处理特征掩码
         # Remap feature shuffles if a feature mask is provided to drop masked columns
+        # feature_mask 不需要用户手动传入，它是在分类器/回归器的 predict 方法中自动计算出来的
         if feature_mask is not None:
+            # 示例：原始特征索引: [0, 1, 2, 3, 4]
+            # feature_mask: [False, True, False, True, False] → 特征 1,3 全是 NaN，需要掩码
+            # filtered_mask (应用 UniqueFeatureFilter 后): [False, True, False, True, False]
+            # kept_cols: [True, False, True, False, True]  # 保留 0,2,4
+
+            # 映射: 旧索引→新索引 idx_map = {0: 0, 2: 1, 4: 2}  # 0→0, 2→1, 4→2
+
+            # 原始打乱: [2, 4, 0, 3, 1]
+            # 重映射后: [1, 2, 0]  # 只保留存在的索引，替换为新索引
+
             # Map mask from original feature space to filtered space
+            # 1. 映射掩码到过滤后的特征空间
             filtered_mask = feature_mask[self.unique_filter_.features_to_keep_]
-            kept_cols = ~filtered_mask
+            kept_cols = ~filtered_mask # 保留的列（False=保留）
             # Build old-index -> new-index mapping for shuffle remapping
+            # 2. 构建旧索引→新索引映射
             idx_map = {}
             new_idx = 0
             for old_idx in range(len(filtered_mask)):
@@ -1180,6 +1291,7 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
                     new_idx += 1
 
             # Pre-compute remapped feature shuffles per norm method
+            # 3. 重新映射特征打乱模式
             self.masked_feature_shuffles_ = OrderedDict()
             for norm_method, shuffle_configs in self.ensemble_configs_.items():
                 remapped = []
@@ -1187,23 +1299,31 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
                     remapped.append([idx_map[i] for i in feat_shuffle if i in idx_map])
                 self.masked_feature_shuffles_[norm_method] = remapped
 
+        # 三种模式
+
         if mode == "train":
             y = self.y_
             data = OrderedDict()
             for norm_method, shuffle_configs in self.ensemble_configs_.items():
+                # 获取预处理后的训练数据
                 X_preprocessed = self.preprocessors_[norm_method].X_transformed_
+                # 应用特征掩码
                 if feature_mask is not None:
                     X_preprocessed = X_preprocessed[:, kept_cols]
                 X_ensemble = []
                 y_ensemble = []
                 for i, (feat_shuffle, y_pattern) in enumerate(shuffle_configs):
+                    # 应用特征打乱
                     if feature_mask is not None:
                         feat_shuffle = self.masked_feature_shuffles_[norm_method][i]
                     X_ensemble.append(X_preprocessed[:, feat_shuffle])
+                    # 应用类别打乱（分类任务）
                     if self.classification:
                         y_ensemble.append(np.array(y_pattern)[y.astype(int)])
                     else:
                         y_ensemble.append(y)
+                # 堆叠所有变体
+                # np.stack 在新维度上把数组摞起来，axis=0 表在最前面插入新维度。 效果是把 N 个 (样本, 特征) 的二维数组，变成一个 (N, 样本, 特征) 的三维数组，每个学习器占一层
                 data[norm_method] = (np.stack(X_ensemble, axis=0), np.stack(y_ensemble, axis=0))
             return data
 
@@ -1214,19 +1334,23 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
         # Fill masked columns with 0.0 so sklearn transformers don't choke on NaN
         if feature_mask is not None:
             X = np.array(X, dtype=np.float64)
-            X[:, filtered_mask] = 0.0
+            X[:, filtered_mask] = 0.0 # 用0.0填充掩码列，避免sklearn转换器因NaN而崩溃
 
         if mode == "test":
             data = OrderedDict()
             for norm_method, shuffle_configs in self.ensemble_configs_.items():
+                # 使用已拟合的预处理器转换测试数据
                 X_test_preprocessed = self.preprocessors_[norm_method].transform(X)
+                # 应用特征掩码
                 if feature_mask is not None:
                     X_test_preprocessed = X_test_preprocessed[:, kept_cols]
                 X_ensemble = []
                 for i, (feat_shuffle, _) in enumerate(shuffle_configs):
+                    # 应用特征打乱
                     if feature_mask is not None:
                         feat_shuffle = self.masked_feature_shuffles_[norm_method][i]
                     X_ensemble.append(X_test_preprocessed[:, feat_shuffle])
+                # 注意: 只返回 X，没有 y
                 data[norm_method] = (np.stack(X_ensemble, axis=0),)
             return data
 
@@ -1235,25 +1359,32 @@ class EnsembleGenerator(TransformerMixin, BaseEstimator):
         data = OrderedDict()
         for norm_method, shuffle_configs in self.ensemble_configs_.items():
             preprocessor = self.preprocessors_[norm_method]
+            # 获取训练数据（已预处理）
             X_train_pp = preprocessor.X_transformed_
+            # 转换测试数据
             X_test_pp = preprocessor.transform(X)
+            # 应用特征掩码
             if feature_mask is not None:
                 X_train_pp = X_train_pp[:, kept_cols]
                 X_test_pp = X_test_pp[:, kept_cols]
+            # 拼接训练和测试数据
             X_variant = np.concatenate([X_train_pp, X_test_pp], axis=0)
             X_ensemble = []
             y_ensemble = []
             for i, (feat_shuffle, y_pattern) in enumerate(shuffle_configs):
+                # 应用特征打乱
                 if feature_mask is not None:
                     feat_shuffle = self.masked_feature_shuffles_[norm_method][i]
                 X_ensemble.append(X_variant[:, feat_shuffle])
 
+                # 应用类别打乱（分类任务）
                 if self.classification:
                     # Apply class shuffle for classification
                     y_ensemble.append(np.array(y_pattern)[y.astype(int)])
                 else:
                     y_ensemble.append(y)
 
+            # 堆叠所有变体
             data[norm_method] = (np.stack(X_ensemble, axis=0), np.stack(y_ensemble, axis=0))
 
         return data

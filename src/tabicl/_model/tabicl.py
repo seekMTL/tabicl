@@ -153,9 +153,9 @@ class TabICL(nn.Module):
         col_feature_group: Union[bool, Literal["same", "valid"]] = "same",
         col_feature_group_size: int = 3,
         col_target_aware: bool = True,
-        col_ssmax: Union[
-            bool,
-            Literal[
+        col_ssmax: Union[ # 参数名 + 类型声明开始
+            bool, # 第一种允许的类型
+            Literal[ # 第二种类型：精确字面值列表。允许的字符串值（6选1）
                 "none",
                 "ssmax",
                 "ssmax-mlp",
@@ -163,7 +163,7 @@ class TabICL(nn.Module):
                 "qassmax-mlp",
                 "qassmax-mlp-elementwise",
             ],
-        ] = "qassmax-mlp-elementwise",
+        ] = "qassmax-mlp-elementwise", # 默认值
         row_num_blocks: int = 3,
         row_nhead: int = 8,
         row_num_cls: int = 4,
@@ -686,11 +686,13 @@ class TabICL(nn.Module):
             if use_cache=True but X_test is None or no cache exists.
         """
 
+        # 如果外部传入了 cache，自动切换到使用缓存模式
         if cache is not None:
             use_cache = True
             store_cache = False
             self._cache = cache
 
+        # 互斥约束：不能同时为 True 或同时为 False
         if use_cache == store_cache:
             raise ValueError("Exactly one of use_cache or store_cache must be True")
 
@@ -701,6 +703,7 @@ class TabICL(nn.Module):
             inference_config = InferenceConfig()
 
         # Auto-detect cache mode from cache contents
+        # 使用缓存时自动检测缓存类型
         if use_cache and self._cache is not None and self._cache.cache_type == "repr":
             cache_mode = "repr"
 
@@ -709,13 +712,13 @@ class TabICL(nn.Module):
                 raise ValueError("X_train and y_train are required when store_cache=True")
 
             # Initialize cache based on training data
-            num_classes = len(torch.unique(y_train[0])) if self.max_classes > 0 else 0
+            num_classes = len(torch.unique(y_train[0])) if self.max_classes > 0 else 0 # 由max_classes可决定是分类/回归任务
             self._cache = TabICLCache(train_shape=X_train.shape, num_classes=num_classes)
 
             if X_test is None:
-                X = X_train
+                X = X_train # 只编码训练数据（纯缓存模式）
             else:
-                X = torch.cat([X_train, X_test], dim=1)
+                X = torch.cat([X_train, X_test], dim=1) # 拼接训练+测试
 
         if use_cache:
             if X_test is None:
@@ -724,9 +727,10 @@ class TabICL(nn.Module):
             if self._cache is None or self._cache.is_empty():
                 raise ValueError("No cache available. Call with store_cache=True first.")
 
-            X = X_test
-            y_train = None
+            X = X_test # 只需要测试数据
+            y_train = None # 标签从缓存中隐式获取
 
+        # 列嵌入 + 行交互
         # Column-wise embedding with cache support -> Row-wise interaction
         representations = self.row_interactor(
             self.col_embedder.forward_with_cache(
@@ -740,16 +744,21 @@ class TabICL(nn.Module):
             mgr_config=inference_config.ROW_CONFIG,
         )
 
+        # ICL 学习，根据 cache_mode 分两条路径
+        # kv——缓存内容：ColEmbedding 和 ICL 模块中每层 Transformer 的 Key/Value 投影；特点：灵活，测试数据可以任意长度
+        # repr——缓存内容：训练样本的最终行表示（row representation）；特点：更轻量，但灵活性略差
         # Dataset-wise in-context learning
         if cache_mode == "repr":
+            # 存缓存时：将 y_train 编码进训练样本的行表示中，存到 _cache.row_repr，然后返回 None
             if store_cache:
                 train_size = y_train.shape[1]
                 # Bake y_train into train portion of representations
                 representations = self.icl_predictor.prepare_repr_cache(representations, y_train)
-                self._cache.row_repr = representations[:, :train_size]
+                self._cache.row_repr = representations[:, :train_size] # 只存训练部分
 
                 if X_test is None:
                     return None
+            # 用缓存时：从缓存取训练表示 + 拼接新计算的测试表示，传给 forward_with_repr_cache（只对 ICL 部分做前向传播）
             else:
                 # Concatenate cached train representations with test representations
                 train_repr = self._cache.row_repr
@@ -854,8 +863,15 @@ class TabICL(nn.Module):
             - "raw_quantiles": (B, test_size, num_quantiles), where `num_quantiles` denotes 
                 the number of quantile levels configured in the model architecture.
         """
+        
+        # 此函数是回归任务专用的推理入口，
+        # 底层委托 forward_with_cache 完成带 KV 缓存的三阶段前向传播（列嵌入 → 行交互 → ICL 学习）得到原始分位数预测，
+        # 然后将分位数通过 QuantileToDistribution 转换为单调的概率分布，最后从中提取用户要求的统计量（均值/方差/中位数/指定分位数）
+        
+        # 此函数只用于回归
         assert self.max_classes == 0, "predict_stats_with_cache is only applicable for regression tasks"
 
+        # 核心调用
         raw_quantiles = self.forward_with_cache(
             X_train=X_train,
             y_train=y_train,
@@ -867,33 +883,41 @@ class TabICL(nn.Module):
             inference_config=inference_config,
         )
 
+        # 纯缓存模式（store_cache=True, X_test=None）→ 返回值raw_quantiles=None，当前函数也返回None, 用于 _build_kv_cache
         if raw_quantiles is None:
             return None
 
+        # 确保分位数单调性
         dist = self.quantile_dist(raw_quantiles)
         raw_quantiles = dist.quantiles
 
+        # 统一转为列表，方便统一处理。支持多个统计量同时请求，如 ["mean", "variance", "quantiles"]
         output_type = [output_type] if isinstance(output_type, str) else output_type
         results = {}
 
         if "mean" in output_type:
-            results["mean"] = raw_quantiles.mean(dim=-1)
+            # 均值：对 999 个分位数取算术平均 → 期望值。最快，无尾部分布建模
+            results["mean"] = raw_quantiles.mean(dim=-1) # raw_quantiles: (B, test_size, 999) → .mean(dim=-1) → (B, test_size)
         if "variance" in output_type:
-            results["variance"] = raw_quantiles.var(dim=-1)
+            # 方差：分位数分布的方差 → 预测不确定性的度量
+            results["variance"] = raw_quantiles.var(dim=-1) # 形状变化同上
         if "median" in output_type:
+            # 中位数：dist.icdf(alpha=0.5) → 逆 CDF 插值得到中位数。对异常值比均值更鲁棒
             results["median"] = dist.icdf(
                 alpha=torch.tensor(0.5, device=raw_quantiles.device, dtype=raw_quantiles.dtype)
             )
         if "quantiles" in output_type:
+            # 指定分位数：默认返回 9 个分位数水平（十分位数）。通过逆 CDF 插值得到精确的分位数值，输出shape(B, test_size, 9)
             if alphas is None:
                 alphas = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
             results["quantiles"] = dist.icdf(
                 alpha=torch.tensor(alphas, device=raw_quantiles.device, dtype=raw_quantiles.dtype)
             )
         if "raw_quantiles" in output_type:
+            # 原始分位数：直接返回全部 999 个单调分位数，不做任何聚合。输出 shape (B, test_size, 999)
             results["raw_quantiles"] = raw_quantiles
 
         if len(output_type) == 1:
-            return results[output_type[0]]
+            return results[output_type[0]] # 单个请求，直接返回 Tensor
 
-        return results
+        return results # 多个请求，返回 dict[str, Tensor]

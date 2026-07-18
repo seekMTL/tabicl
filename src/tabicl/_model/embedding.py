@@ -149,10 +149,10 @@ class ColEmbedding(nn.Module):
         self.max_classes = max_classes
         self.affine = affine
         self.mixed_radix_ensemble = mixed_radix_ensemble
-        self.in_linear = SkippableLinear(feature_group_size if feature_group else 1, embed_dim)
+        self.in_linear = SkippableLinear(feature_group_size if feature_group else 1, embed_dim) # embed_dim默认128
 
         self.tf_col = SetTransformer(
-            num_blocks=num_blocks,
+            num_blocks=num_blocks, # 默认3个
             d_model=embed_dim,
             nhead=nhead,
             dim_feedforward=dim_feedforward,
@@ -178,7 +178,7 @@ class ColEmbedding(nn.Module):
             self.out_b = SkippableLinear(embed_dim, embed_dim)
             self.ln_b = nn.LayerNorm(embed_dim, bias=not bias_free_ln) if norm_first else nn.Identity()
 
-        self.inference_mgr = InferenceManager(enc_name="tf_col", out_dim=embed_dim)
+        self.inference_mgr = InferenceManager(enc_name="tf_col", out_dim=embed_dim) # 一个执行管理器
 
     @staticmethod
     def map_feature_shuffle(reference_pattern: List[int], other_pattern: List[int]) -> List[int]:
@@ -219,6 +219,11 @@ class ColEmbedding(nn.Module):
         Tensor
             Grouped tensor of shape (B, T, G, feature_group_size) where G is the number of groups.
         """
+        
+        # 为什么需要特征分组？
+        # 1、降低 ISAB 计算复杂度：ISAB 在特征维度上做自注意力，复杂度 $O(H^2)$。分组后序列长度从 H 降到 G，"same" 模式保持 H 不变但增加了每组内的信息量，"valid" 模式直接降低复杂度。
+        # 2、增强局部交互：相邻特征往往有相关性（如年龄和收入），将它们捆绑到一组中，让 in_linear（SkippableLinear(group_size, embed_dim)）直接学习组内特征之间的线性组合关系
+        
         if not self.feature_group:
             return X.unsqueeze(-1)  # (B, T, H, 1)
 
@@ -228,16 +233,40 @@ class ColEmbedding(nn.Module):
         # Determine grouping mode
         mode = "same" if self.feature_group is True else self.feature_group
 
+        # 循环排列分组，适用于特征数较少，需要丰富交互
         if mode == "same":
             # Group through circular permutation
-            idxs = torch.arange(H, dtype=torch.long, device=X.device)
+            idxs = torch.arange(H, dtype=torch.long, device=X.device) # 创建基本索引 [0, 1, 2, ..., H-1]
+            #  例如：原始 X: (B, T, 10)  # 10 个特征，size=3
+            #   ├─ i=0 (偏移 1): 取列 [1,2,3,4,5,6,7,8,9,0]
+            #   ├─ i=1 (偏移 2): 取列 [2,3,4,5,6,7,8,9,0,1]
+            #   └─ i=2 (偏移 4): 取列 [4,5,6,7,8,9,0,1,2,3]
+            #   │ 每个位置 j 得到一个组: (X[:,:,j+1], X[:,:,j+2], X[:,:,j+4])
+            #   ▼ stack(dim=-1) 在最后加一个维度
+            # 结果矩阵:
+            #   组 0: 特征 [1, 2, 4]    ← 原始索引 1,2,4 聚为一组
+            #   组 1: 特征 [2, 3, 5]
+            #   ...
+            #   组 9: 特征 [0, 1, 2]    ← 循环回来
+            # 输出: (B, T, 10, 3)  # 10 个组, 每组 3 个特征
+
+            # 用 2 的幂作为偏移：确保每组内的特征交错排列，避免相邻特征总在同一组，每个特征出现在多个组中，这种"重叠分组"创造了信息的冗余覆盖，ISAB 的列间注意力可以捕获全局列间关系
+            # 输出 G = H（组数等于原始特征数，即 "same" 的含义）
             X = torch.stack([X[:, :, (idxs + 2**i) % H] for i in range(size)], dim=-1)
+        # 填充重塑分组，适用于特征数很多，优先降复杂度
         else:
             # Group through padding and reshaping
-            x_pad_cols = (size - H % size) % size
+            x_pad_cols = (size - H % size) % size # 计算需要填充的列数，保证了补齐后的列数是 size 的整数倍
             if x_pad_cols > 0:
-                X = F.pad(X, (0, x_pad_cols), value=0)
+                X = F.pad(X, (0, x_pad_cols), value=0) # (B, T, H) → (B, T, H + x_pad_cols)
             X = X.reshape(B, T, -1, size)
+            # 例如：X: (B, T, 10)
+            # x_pad_cols = (3 - 10%3) % 3 = (3 - 1) % 3 = 2 → 补 2 列零 → (B, T, 12)
+            # reshape(B, T, 4, 3):
+            #   组 0: 特征 [0, 1, 2]、组 1: 特征 [3, 4, 5]、组 2: 特征 [6, 7, 8]、
+            #   组 3: 特征 [9, 0, 0]  ← 补的 0
+            # 输出: (B, T, 4, 3)  # 4 组, 每组 3 特征
+            # 输出 G ≈ H / size（组数约等于原始特征数除以 group_size，即 "valid" 的含义——不重叠的"有效"分组）
 
         return X  # (B, T, G, size)
 
@@ -371,20 +400,21 @@ class ColEmbedding(nn.Module):
 
         if not self.target_aware:
             src = self.tf_col(src, train_size=None if embed_with_test else train_size)
+        # 从tabicl.py得出默认target_aware=true
         else:
             assert y_train is not None, "y_train must be provided when target_aware=True."
 
             # Determine if mixed-radix ensemble is needed
             num_classes = int(y_train.max().item()) + 1
-            needs_mixed_radix = self.max_classes > 0 and num_classes > self.max_classes
+            needs_mixed_radix = self.max_classes > 0 and num_classes > self.max_classes # 回归任务时是false
 
             if not needs_mixed_radix:
                 # Standard target-aware embedding
                 if self.max_classes > 0:
                     y_emb = self.y_encoder(y_train.float())
                 else:
-                    y_emb = self.y_encoder(y_train.unsqueeze(-1))
-                src[..., :train_size, :] = src[..., :train_size, :] + y_emb
+                    y_emb = self.y_encoder(y_train.unsqueeze(-1)) # 回归任务：y_train → Linear(1,128)
+                src[..., :train_size, :] = src[..., :train_size, :] + y_emb # 加到训练样本的每个特征组嵌入上(原地修改)
                 src = self.tf_col(src, train_size=None if embed_with_test else train_size)
             else:
                 # Mixed-radix ensembling for many-class classification
@@ -464,9 +494,9 @@ class ColEmbedding(nn.Module):
         train_size = y_train.shape[1]
         X = self.feature_grouping(X)  # (B, T, G, group_size)
         if self.reserve_cls_tokens > 0:
-            X = F.pad(X, (0, 0, self.reserve_cls_tokens, 0), value=-100.0)
+            X = F.pad(X, (0, 0, self.reserve_cls_tokens, 0), value=-100.0) # 加 4 个 CLS 占位
 
-        features = X.transpose(1, 2)  # (B, G+C, T, group_size)
+        features = X.transpose(1, 2)  # (B, G+C, T, group_size) 🔑 关键！交换 T 和 G 维度
         if self.target_aware:
             assert y_train is not None, "y_train must be provided when target_aware=True."
             y_train = y_train.unsqueeze(1).expand(-1, features.shape[1], -1)
@@ -566,6 +596,7 @@ class ColEmbedding(nn.Module):
         self.inference_mgr.configure(**mgr_config)
 
         train_size = y_train.shape[1]
+        # 从tabicl.py得出默认same
         if self.feature_group:
             embeddings = self._inference_with_feature_group(X, y_train, train_size, embed_with_test)
         else:
@@ -768,33 +799,45 @@ class ColEmbedding(nn.Module):
         Tensor
             Embeddings of shape (..., T, E).
         """
-        src = self.in_linear(features)
+
+        # 无特征分组时（feature_group=False，默认）：
+        # 直观理解：给每个数值特征分配了 128 个"观察角度"，每个角度用不同权重缩放此值，再加偏置。原始标量数值被展开到高维空间，后续神经网络在这个高维空间里有更大的表示能力
+        # 有特征分组时（feature_group=True）
+        # 直观理解：线形层不仅把每组特征映射到高维空间，更重要的是它学习组内特征之间的线性交互。如特征组 [年龄, 收入, 教育年限] 在一起，线性层可直接建模 w_1*年龄 + w_2*收入 + w_3*教育 这样的组合
+        src = self.in_linear(features) # 将每个标量值投影到 embed_dim 维空间
 
         if not self.target_aware:
+            # 不感知目标标签，直接将嵌入后的特征送入 Set Transformer（ISAB）
             src = self.tf_col.forward_with_cache(
                 src, col_cache=col_cache, train_size=train_size, use_cache=use_cache, store_cache=store_cache
             )
         else:
             # When using cache, skip y_train embedding — it's already baked
             # into the cached K/V projections from the store_cache pass.
+            # 存缓存时
             if store_cache:
                 assert y_train is not None, "y_train must be provided when target_aware=True and store_cache=True."
 
                 if self.max_classes > 0:
                     y_emb = self.y_encoder(y_train.float())
-                else:
-                    y_emb = self.y_encoder(y_train.unsqueeze(-1))
+                else: # 回归
+                    y_emb = self.y_encoder(y_train.unsqueeze(-1)) # y_train是连续值 →(B, G+C, train_size, 1)→ nn.Linear(1, embed_dim) → 直接投影到 embed_dim
+                # 只将标签嵌入加到训练样本位置的特征嵌入上,加法意味着标签信息作为一种"偏置信号"融入特征表示
                 src[..., :train_size, :] = src[..., :train_size, :] + y_emb
 
+            # 用缓存时不添加标签嵌入，因为存缓存时已经加过了，K/V 投影中已包含标签信息
             src = self.tf_col.forward_with_cache(
                 src, col_cache=col_cache, train_size=train_size, use_cache=use_cache, store_cache=store_cache
             )
 
+        # affine 变换
+        # affine 模式,一种列感知的"特征缩放"机制。ISAB 输出的 weights 和 biases 不是全局共享的，而是每个特征列/组有各自的 w 和 b。这意味着：
+        # 不同列可以有不同的"缩放"和"偏移"，ISAB 根据列间交互信息动态决定每列应该如何缩放，最终形成分布感知的列嵌入
         if self.affine:
             weights = self.ln_w(self.out_w(src))
             biases = self.ln_b(self.out_b(src))
             embeddings = features * weights + biases
-        else:
+        else: # 非 affine 模式直接用 ISAB 输出作为嵌入，不做额外的逐元素缩放
             embeddings = src
 
         return embeddings
@@ -838,12 +881,14 @@ class ColEmbedding(nn.Module):
             Embeddings of shape (B, T, G+C, E).
         """
 
+        # 存缓存和用缓存是互斥操作
         if use_cache == store_cache:
             raise ValueError("Exactly one of use_cache or store_cache must be True")
 
         if store_cache:
             assert y_train is not None, "y_train must be provided when store_cache=True"
             # many-class classification is not supported with caching
+            # 这个限制只影响多分类任务，回归任务不受影响
             if self.target_aware and self.max_classes > 0:
                 num_classes = int(y_train.max().item()) + 1
                 if num_classes > self.max_classes:
@@ -857,20 +902,28 @@ class ColEmbedding(nn.Module):
             mgr_config = InferenceConfig().COL_CONFIG
         self.inference_mgr.configure(**mgr_config)
 
+        # 数据预处理（特征分组与维度变换）
+        # 特征分组模式
         if self.feature_group:
+            # 将原始特征按 group_size（默认 3）分组，以减少列数、增加每组内信息量，降低 ISAB 的计算复杂度
             X = self.feature_grouping(X)  # (B, T, G, group_size)
+            # 在特征维度上预留 CLS token 的位置，即在 G 维度前面加 4 个 padding
             if self.reserve_cls_tokens > 0:
-                X = F.pad(X, (0, 0, self.reserve_cls_tokens, 0), value=-100.0)
+                X = F.pad(X, (0, 0, self.reserve_cls_tokens, 0), value=-100.0) # -100.0 是哨兵值，后续 ISAB 会识别并特殊处理这些 CLS token 位置
+            # 将样本维度和特征组维度交换，因为 ISAB 是在特征组维度上做注意力
             features = X.transpose(1, 2)  # (B, G+C, T, group_size)
+        # 无特征分组模式
         else:
             if self.reserve_cls_tokens > 0:
-                X = F.pad(X, (self.reserve_cls_tokens, 0), value=-100.0)
+                X = F.pad(X, (self.reserve_cls_tokens, 0), value=-100.0) # (B, T, H) → (B, T, H+4)
             features = X.transpose(1, 2).unsqueeze(-1)  # (B, H+C, T, 1)
 
         if store_cache:
+            # 存缓存时：将标签广播到每个特征组/特征，因为每个特征都需要感知目标信息
             train_size = y_train.shape[1]
-            y_train = y_train.unsqueeze(1).expand(-1, features.shape[1], -1)
+            y_train = y_train.unsqueeze(1).expand(-1, features.shape[1], -1) # (B, train_size)->(B, G+C, train_size)
         else:
+            # 用缓存时：不需要标签，因为标签信息已在存缓存阶段被编码进了 K/V 投影中
             train_size = None
             y_train = None
 
@@ -887,4 +940,5 @@ class ColEmbedding(nn.Module):
                 ]
             ),
         )
+        # 维度还原并返回：(B, G+C, T, E)->(B, T, G+C, E)
         return embeddings.transpose(1, 2)

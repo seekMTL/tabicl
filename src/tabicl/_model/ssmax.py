@@ -146,23 +146,40 @@ class QASSMaxMLP(nn.Module):
         different scaling for each element in the head dimension.
     """
 
+    # 问题：长序列下标准 softmax 的注意力熵值偏低（过于集中）
+    # 解决：对 Q 做可学习的缩放：
+    # q_scaled = q · base_mlp(log n) · (1 + tanh(query_mlp(q)))
+    #             \_________________/   \_____________________/
+    #              全局缩放（长度相关）     局部调制（内容相关）
+
+    # 含义:
+    # - n=1000 (长序列) → log n ≈ 6.9 → base_mlp 输出较大缩放 → 注意力更分散
+    # - n=3   (短序列) → log n ≈ 1.1 → base_mlp 输出较小缩放 → 注意力更集中
+    # - query_mlp 初始化为 0（tanh(0)=0），训练前期 modulation=1，逐步学习
+
     def __init__(self, num_heads: int, head_dim: int, n_hidden: int = 64, elementwise: bool = False):
         super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = head_dim
-        self.elementwise = elementwise
+        self.num_heads = num_heads # 默认8
+        self.head_dim = head_dim # 默认16
+        self.elementwise = elementwise # 是否对 head_dim 中每个元素独立缩放
+        
+        # 根据 elementwise 决定输出维度
+        if elementwise: # 参数量: 更多, 表达能力更强
+            base_out_dim = num_heads * head_dim # 8*16 = 128 (每头每个元素一个缩放值)
+            query_out_dim = head_dim # 16 (每头每个元素一个调制值)
+        else: # 参数量: 较少, 表达能力有限
+            base_out_dim = num_heads # 8 (每头一个缩放值)
+            query_out_dim = 1 # 1 (每头一个调制值)
 
-        if elementwise:
-            base_out_dim = num_heads * head_dim
-            query_out_dim = head_dim
-        else:
-            base_out_dim = num_heads
-            query_out_dim = 1
-
+        # 长度感知的全局缩放 MLP
+        # 输入: (batch, 1)  ← 就是 log n；输出: base_out_dim (8 或 128)
         self.base_mlp = nn.Sequential(nn.Linear(1, n_hidden), nn.GELU(), nn.Linear(n_hidden, base_out_dim))
+        # 内容感知的局部调制 MLP
+        # 输入: 每个 query 向量的最后一维 (head_dim = 16)；输出: query_out_dim (1 或 16)
         self.query_mlp = nn.Sequential(nn.Linear(head_dim, n_hidden), nn.GELU(), nn.Linear(n_hidden, query_out_dim))
 
         # ensures initial modulation is zero
+        # query_mlp 输出层零初始化！确保训练初期 1+tanh(0)=1，不引入额外的调制
         nn.init.zeros_(self.query_mlp[-1].weight)
         nn.init.zeros_(self.query_mlp[-1].bias)
 
@@ -182,19 +199,27 @@ class QASSMaxMLP(nn.Module):
         torch.Tensor
             Scaled query tensor, same shape as ``q``.
         """
-        logn = _logn(n, q.device, q.dtype).reshape(1, 1)
+        
+        # 假设具体例子:
+        #   num_heads=8, head_dim=16, elementwise=True
+        #   q: (bs=6, n_heads=8, seq_len=7, head_dim=16)；n: 7 (源序列长度)
+
+        logn = _logn(n, q.device, q.dtype).reshape(1, 1) # log_n=ln(7) ≈ 1.946 → reshape → (1, 1)
 
         if self.elementwise:
             # base_scales: (1, num_heads * head_dim) -> (1, num_heads, 1, head_dim)
+            # base_mlp 计算全局缩放：log_n: (1, 1) → base_mlp → (1, 128) → view → (1, 8, 1, 16)  
             base_scales = self.base_mlp(logn).view(1, self.num_heads, 1, self.head_dim)
+            # query_mlp 计算局部调制：q: (6, 8, 7, 16) → query_mlp → (6, 8, 7, 16)
+            # tanh范围(-1, 1)，故modulation范围 (0, 2)
             modulation = 1 + torch.tanh(self.query_mlp(q))  # (bs, n_heads, seq_len, head_dim)
         else:
             base_scales = self.base_mlp(logn).view(1, self.num_heads, 1, 1)
             modulation = 1 + torch.tanh(self.query_mlp(q))  # (bs, n_heads, seq_len, 1)
 
-        scales = base_scales * modulation
+        scales = base_scales * modulation # scales 通过广播乘法组合，逐元素相乘
 
-        return q * scales
+        return q * scales # 将缩放乘回 query
 
 
 def create_ssmax_layer(ssmax_type: str, num_heads: int, embed_dim: int):
