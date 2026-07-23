@@ -84,14 +84,16 @@ class ICLearning(nn.Module):
         bias_free_ln: bool = False,
         ssmax: Union[bool, str] = False,
         recompute: bool = False,
+        num_outputs: int = 1, # 输出维度数，>1 时共享 ICL backbone，每维度独立 y_encoder + decoder head
     ):
         super().__init__()
 
         self.max_classes = max_classes
         self.norm_first = norm_first
+        self.num_outputs = num_outputs # 输出维度数（回归多输出任务用）
 
         self.tf_icl = Encoder(
-            num_blocks=num_blocks, # 默认12个 Transformer block
+            num_blocks=num_blocks, # 默认12个 Transformer block，多输出时共享
             d_model=d_model, # 默认4*128=512
             nhead=nhead,
             dim_feedforward=dim_feedforward,
@@ -105,16 +107,34 @@ class ICLearning(nn.Module):
         if self.norm_first:
             self.ln = nn.LayerNorm(d_model, bias=not bias_free_ln)
 
-        if max_classes > 0:  # Classification
+        if max_classes > 0:  # Classification（仅支持单输出）
             self.y_encoder = OneHotAndLinear(max_classes, d_model)
+            self.decoder = nn.Sequential(
+                nn.Linear(d_model, d_model * 2),
+                nn.GELU(),
+                nn.Linear(d_model * 2, out_dim),
+            )
         else:  # Regression
-            self.y_encoder = nn.Linear(1, d_model) # d_model默认= embed_dim(128) * row_num_cls(4)
+            if num_outputs == 1:
+                # 单输出：保持原始结构，与预训练 checkpoint state_dict 完全兼容
+                self.y_encoder = nn.Linear(1, d_model)  # d_model默认= embed_dim(128) * row_num_cls(4)
+                self.decoder = nn.Sequential( # 是一个两层 MLP
+                    nn.Linear(d_model, d_model * 2), # 512 → 1024
+                    nn.GELU(), # 激活函数
+                    nn.Linear(d_model * 2, out_dim) # 1024 → out_dim(回归默认是999，代表分位)
+                )
+            else:
+                # 多输出：每个输出维度独立的 y_encoder + decoder head
+                self.y_encoders = nn.ModuleList([nn.Linear(1, d_model) for _ in range(num_outputs)])
+                self.decoders = nn.ModuleList([
+                    nn.Sequential( # 是一个两层 MLP
+                        nn.Linear(d_model, d_model * 2), # 512 → 1024
+                        nn.GELU(), # 激活函数
+                        nn.Linear(d_model * 2, out_dim) # 1024 → out_dim(回归默认是999，代表分位)
+                    )
+                    for _ in range(num_outputs)
+                ])
 
-        self.decoder = nn.Sequential( # 是一个两层 MLP
-            nn.Linear(d_model, d_model * 2), # 512 → 1024
-            nn.GELU(), # 激活函数
-            nn.Linear(d_model * 2, out_dim) # 1024 → out_dim(回归默认是999，代表分位)
-        )
         self.inference_mgr = InferenceManager(enc_name="tf_icl", out_dim=out_dim)
 
     def _grouping(self, num_classes: int) -> tuple[Tensor, int]:
@@ -252,30 +272,56 @@ class ICLearning(nn.Module):
              - D is the dimension of row representations
 
         y_train : Tensor
-            Training targets of shape (B, train_size), where train_size is the position
-            to split the input into training and test data.
+            Training targets.
+            - Single-output: shape (B, train_size)
+            - Multi-output: shape (B, train_size, num_outputs)
 
         Returns
         -------
         Tensor
-            Predictions of shape (B, T, out_dim):
-
-            - For regression (max_classes=0): out_dim = num_quantiles
-            - For classification (max_classes>0): out_dim = max_classes
+            - Single-output: shape (B, T, out_dim)
+            - Multi-output: shape (B, T, num_outputs, out_dim)
         """
 
         train_size = y_train.shape[1]
-        if self.max_classes > 0:  # Classification
+        if self.max_classes > 0:  # Classification（仅单输出）
             Ry_train = self.y_encoder(y_train.float())
-        else:  # Regression
-            # 本质：将标量标签 y 编码为与行表示 R 同维度的向量，使得标签信息可以被"注入"到表示中
-            Ry_train = self.y_encoder(y_train.unsqueeze(-1)) # (B, train_size)->(B, train_size, 1), 经过y_encoder即全连接层变成(B, train_size, d_model) d_model默认512
-        R[:, :train_size] = R[:, :train_size] + Ry_train # 将标签嵌入加到训练样本的行表示上(原地修改)
+            R[:, :train_size] = R[:, :train_size] + Ry_train
 
-        src = self.tf_icl(R, train_size=train_size) # ICL Transformer(12层)前向传播，关键参数train_size控制注意力掩码; 训练样本互看，测试样本只看训练
-        if self.norm_first:
-            src = self.ln(src) # Pre-Norm 架构的最后归一化
-        out = self.decoder(src) # 解码器MLP：Linear(512→1024) → GELU → Linear(1024→999)
+            src = self.tf_icl(R, train_size=train_size)
+            if self.norm_first:
+                src = self.ln(src)
+            out = self.decoder(src)
+            return out
+        else:  # Regression
+            num_outputs = self.num_outputs
+            if y_train.dim() == 2:
+                y_train = y_train.unsqueeze(-1)  # → (B, train_size, 1)
+
+            if num_outputs == 1:
+                # 单输出：使用原始 y_encoder + decoder，与预训练行为完全一致
+                Ry_train = self.y_encoder(y_train[:, :, 0].unsqueeze(-1))
+                R[:, :train_size] = R[:, :train_size] + Ry_train
+                src = self.tf_icl(R, train_size=train_size)
+                if self.norm_first:
+                    src = self.ln(src)
+                return self.decoder(src)  # (B, T, out_dim)
+            else:
+                # 多输出：每个输出维度独立编码 y，独立运行 ICL transformer + decoder head
+                # ColEmbedding + RowInteraction 已在外部共享，此处每个维度独立前向以保证零样本兼容性
+                outs = []
+                for j in range(num_outputs):
+                    R_j = R.clone()
+                    y_emb_j = self.y_encoders[j](y_train[:, :, j].unsqueeze(-1))
+                    R_j[:, :train_size] = R_j[:, :train_size] + y_emb_j
+
+                    src_j = self.tf_icl(R_j, train_size=train_size)
+                    if self.norm_first:
+                        src_j = self.ln(src_j)
+                    out_j = self.decoders[j](src_j)
+                    outs.append(out_j)
+
+                out = torch.stack(outs, dim=-2)  # (B, T, num_outputs, out_dim)
 
         return out
 
@@ -338,6 +384,8 @@ class ICLearning(nn.Module):
         train_size = y_train.shape[1]
         if self.max_classes == 0:
             out = out[:, train_size:] # 子步骤 B：切分出测试部分的预测
+            # Multi-output: (B, test_size, num_outputs, out_dim)
+            # Single-output: (B, test_size, out_dim) - kept as-is
         else:
             num_classes = len(torch.unique(y_train[0]))
             out = out[:, train_size:, :num_classes]

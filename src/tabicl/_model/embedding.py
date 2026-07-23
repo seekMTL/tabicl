@@ -414,8 +414,9 @@ class ColEmbedding(nn.Module):
                     y_emb = self.y_encoder(y_train.float())
                 else:
                     y_emb = self.y_encoder(y_train.unsqueeze(-1)) # 回归任务：y_train → Linear(1,128)
+                # 编码训练标签 y，只加到训练样本上：训练样本 = 特征嵌入 + 标签嵌入；测试样本 = 特征嵌入（不加标签）
                 src[..., :train_size, :] = src[..., :train_size, :] + y_emb # 加到训练样本的每个特征组嵌入上(原地修改)
-                src = self.tf_col(src, train_size=None if embed_with_test else train_size)
+                src = self.tf_col(src, train_size=None if embed_with_test else train_size) # ISAB 注意力：训练样本带标签信号，测试不带
             else:
                 # Mixed-radix ensembling for many-class classification
                 if not self.mixed_radix_ensemble:

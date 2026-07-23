@@ -7,6 +7,7 @@ from torch import nn, Tensor
 from .embedding import ColEmbedding
 from .interaction import RowInteraction
 from .learning import ICLearning
+from .action_encoder import ActionEncoder
 from .quantile_dist import QuantileToDistribution
 from .kv_cache import TabICLCache
 from .inference_config import InferenceConfig
@@ -188,6 +189,12 @@ class TabICL(nn.Module):
         norm_first: bool = True,
         bias_free_ln: bool = False,
         recompute: bool = False,
+        num_outputs: int = 1, # 输出维度数，>1 时共享 backbone，每维度独立 y_encoder + decoder head
+        # 双流模式（实验 1/2）：分离 state 和 action 处理
+        use_action_encoder: bool = False, # 启用独立的 ActionEncoder
+        state_dim: int = 11,              # 状态维度（Hopper-v5: 11）
+        action_dim: int = 3,              # 动作维度（Hopper-v5: 3）
+        action_encoder_mode: Literal["mlp", "transformer"] = "mlp", # ActionEncoder 类型
     ):
         super().__init__()
         icl_dim = embed_dim * row_num_cls  # CLS tokens are concatenated for ICL
@@ -203,6 +210,10 @@ class TabICL(nn.Module):
 
         self.max_classes = max_classes
         self.num_quantiles = num_quantiles
+        self.num_outputs = num_outputs
+        self.use_action_encoder = use_action_encoder
+        self.state_dim = state_dim
+        self.action_dim = action_dim
         self.embed_dim = embed_dim
         self.col_num_blocks = col_num_blocks
         self.col_nhead = col_nhead
@@ -274,7 +285,22 @@ class TabICL(nn.Module):
             bias_free_ln=bias_free_ln,
             ssmax=icl_ssmax,
             recompute=recompute,
+            num_outputs=num_outputs, # 多输出回归任务：共享 ICL backbone，每维度独立 head
         )
+
+        # 双流模式：独立的 ActionEncoder + 融合层
+        if use_action_encoder:
+            self.action_encoder = ActionEncoder(
+                action_dim=action_dim,
+                d_model=embed_dim,
+                hidden_dim=embed_dim * 2, # 256
+                mode=action_encoder_mode,
+            )
+            # 融合投影：将 [state_repr(C*E) | action_repr(E)] → ICL 期望的 d_model(C*E)
+            self.fusion_proj = nn.Linear(icl_dim + embed_dim, icl_dim)
+        else:
+            self.action_encoder = None
+            self.fusion_proj = None
 
         # KV cache for efficient inference
         self._cache: Optional[TabICLCache] = None
@@ -303,9 +329,9 @@ class TabICL(nn.Module):
             The first train_size positions contain training samples, and the remaining positions contain test samples.
 
         y_train : Tensor
-            Training labels of shape (B, train_size) where:
-             - B is the number of tables
-             - train_size is the number of training samples provided for in-context learning
+            Training labels.
+            - Single-output: shape (B, train_size)
+            - Multi-output: shape (B, train_size, num_outputs)
 
         d : Optional[Tensor], default=None
             The number of features per dataset.
@@ -316,13 +342,12 @@ class TabICL(nn.Module):
         Returns
         -------
         Tensor
-            Predictions of shape (B, test_size, out_dim):
-
-            - For regression (max_classes=0): out_dim = num_quantiles
-            - For classification (max_classes>0): out_dim = max_classes
+            - Single-output: shape (B, test_size, out_dim)
+            - Multi-output: shape (B, test_size, num_outputs, out_dim)
         """
 
         B, T, H = X.shape
+        # y_train.shape[1] 在单输出 (B, train_size) 和多输出 (B, train_size, num_outputs) 下都是 train_size
         train_size = y_train.shape[1]
         assert train_size <= T, "Number of training samples exceeds total samples"
 
@@ -330,19 +355,35 @@ class TabICL(nn.Module):
         if d is not None and len(d.unique()) == 1 and d[0] == H:
             d = None
 
-        # Column-wise embedding -> Row-wise interaction
-        representations = self.row_interactor(
-            self.col_embedder(
-                X,
-                y_train=y_train,
-                d=d,
-                embed_with_test=embed_with_test,
-            ),
-            d=d,
-        )
+        # 多输出时：ColEmbedding 仅使用第一个输出维度做 target-aware embedding
+        y_col = y_train[:, :, 0] if y_train.dim() == 3 else y_train
 
-        # Dataset-wise in-context learning
-        return self.icl_predictor(representations, y_train=y_train)
+        if self.use_action_encoder:
+            # 双流模式：state 和 action 分离处理
+            X_state = X[:, :, :self.state_dim]   # (B, T, state_dim)
+            X_action = X[:, :, self.state_dim:]  # (B, T, action_dim)
+
+            # 流 1: state → ColEmbedding → RowInteraction
+            state_repr = self.row_interactor(
+                self.col_embedder(X_state, y_train=y_col, d=d, embed_with_test=embed_with_test),
+                d=d,
+            )  # (B, T, C*E)
+
+            # 流 2: action → ActionEncoder
+            action_repr = self.action_encoder(X_action)  # (B, T, E)
+
+            # 融合: concat + Linear projection
+            combined = torch.cat([state_repr, action_repr], dim=-1)  # (B, T, C*E + E)
+            combined = self.fusion_proj(combined)  # (B, T, C*E)
+
+            return self.icl_predictor(combined, y_train=y_train)
+        else:
+            # 原始模式: state+action 作为统一特征输入
+            representations = self.row_interactor(
+                self.col_embedder(X, y_train=y_col, d=d, embed_with_test=embed_with_test),
+                d=d,
+            )
+            return self.icl_predictor(representations, y_train=y_train)
 
     def _inference_forward(
         self,
@@ -398,27 +439,49 @@ class TabICL(nn.Module):
                 If return_logits=False: Probabilities of shape (B, test_size, num_classes)
         """
 
+        # y_train.shape[1] 在单输出 (B, train_size) 和多输出 (B, train_size, num_outputs) 下都是 train_size
         train_size = y_train.shape[1]
         assert train_size <= X.shape[1], "Number of training samples exceeds total samples"
 
         if inference_config is None:
             inference_config = InferenceConfig()
 
-        # Column-wise embedding -> Row-wise interaction
-        representations = self.row_interactor(
-            self.col_embedder(
-                X,
-                y_train=y_train,
-                embed_with_test=embed_with_test,
-                feature_shuffles=feature_shuffles,
-                mgr_config=inference_config.COL_CONFIG,
-            ),
-            mgr_config=inference_config.ROW_CONFIG,
-        )
+        # 多输出时：ColEmbedding 仅使用第一个输出维度做 target-aware embedding
+        y_col = y_train[:, :, 0] if y_train.dim() == 3 else y_train
 
-        # Dataset-wise in-context learning
+        if self.use_action_encoder:
+            # 双流模式
+            X_state = X[:, :, :self.state_dim]
+            X_action = X[:, :, self.state_dim:]
+
+            state_repr = self.row_interactor(
+                self.col_embedder(
+                    X_state, y_train=y_col,
+                    embed_with_test=embed_with_test,
+                    feature_shuffles=feature_shuffles,
+                    mgr_config=inference_config.COL_CONFIG,
+                ),
+                mgr_config=inference_config.ROW_CONFIG,
+            )
+
+            action_repr = self.action_encoder(X_action)
+            combined = torch.cat([state_repr, action_repr], dim=-1)
+            combined = self.fusion_proj(combined)
+        else:
+            # 原始模式
+            combined = self.row_interactor(
+                self.col_embedder(
+                    X, y_train=y_col,
+                    embed_with_test=embed_with_test,
+                    feature_shuffles=feature_shuffles,
+                    mgr_config=inference_config.COL_CONFIG,
+                ),
+                mgr_config=inference_config.ROW_CONFIG,
+            )
+
+        # Dataset-wise in-context learning（多输出时传入完整 y_train）
         out = self.icl_predictor(
-            representations,
+            combined,
             y_train=y_train,
             return_logits=return_logits,
             softmax_temperature=softmax_temperature,
