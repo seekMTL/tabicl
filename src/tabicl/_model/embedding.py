@@ -415,6 +415,7 @@ class ColEmbedding(nn.Module):
                 else:
                     y_emb = self.y_encoder(y_train.unsqueeze(-1)) # 回归任务：y_train → Linear(1,128)
                 src[..., :train_size, :] = src[..., :train_size, :] + y_emb # 加到训练样本的每个特征组嵌入上(原地修改)
+                # embed_with_test 参数通过影响传递给 SetTransformer 的 train_size 形参来控制 ISAB 的 Stage 1 中，诱导点（inducing points）是否能看到测试样本来形成列分布统计
                 src = self.tf_col(src, train_size=None if embed_with_test else train_size)
             else:
                 # Mixed-radix ensembling for many-class classification

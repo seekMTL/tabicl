@@ -677,6 +677,31 @@ class InducedSelfAttentionBlock(nn.Module):
         *batch_shape, _, d_model = src.shape
         ind_vectors = self.ind_vectors.expand(*batch_shape, self.num_inds, d_model)
 
+        # train_size参数由列嵌入阶段的_compute_embeddings方法的embed_with_test参数选择传入，假设有3个训练样本+2个测试样本，可视化对比如下：
+        # embed_with_test = False (默认):
+        # ┌─────────────────────────────────────────────────────────┐
+        # │ Stage 1: 诱导点 ← 训练样本（only）                       │
+        # │   Q: 128 个诱导点                                       │
+        # │   K/V: [样本0, 样本1, 样本2]  ← 只有训练！              │
+        # │        [样本3(test), 样本4(test)]  ❌ 被屏蔽            │
+        # │                                                         │
+        # │ → hidden 只编码了训练集的列分布                          │
+        # │ → 测试数据不参与列嵌入的形成                             │
+        # └─────────────────────────────────────────────────────────┘
+
+        # embed_with_test = True:
+        # ┌─────────────────────────────────────────────────────────┐
+        # │ Stage 1: 诱导点 ← 全部样本                               │
+        # │   Q: 128 个诱导点                                       │
+        # │   K/V: [样本0, 样本1, 样本2, 样本3(test), 样本4(test)]   │
+        # │        ← 全部！                                         │
+        # │                                                         │
+        # │ → hidden 编码了完整数据集的列分布                        │
+        # │ → 测试数据也参与列嵌入的形成                             │
+        # └─────────────────────────────────────────────────────────┘
+        
+        # Stage 2 不受影响：两种模式下，Stage 2 都是所有样本（训练+测试）attend 到 hidden
+
         if train_size is None:
             hidden = self.multihead_attn1(ind_vectors, src, src) # 关注全部
         else:

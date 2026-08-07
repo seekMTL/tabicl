@@ -135,3 +135,7 @@ dmypy.json
 # sphinx-gallery generated files
 docs/sg_execution_times.rst
 docs/tutorials/
+
+# Training artifacts
+# checkpoints/
+*.pt
