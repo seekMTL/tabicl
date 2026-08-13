@@ -53,6 +53,7 @@ class CAQTabICL(nn.Module):
 
         # Stage 1: ColEmbedding（保持预训练权重）
         self.col_embedder = pretrained_tabicl.col_embedder
+        self.col_embedder.target_aware = False  # 关闭 target-aware，使 CLS token 与 y 无关，支持并行训练
         if freeze_col_embedder:
             for p in self.col_embedder.parameters():
                 p.requires_grad = False
