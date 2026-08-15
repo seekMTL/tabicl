@@ -35,7 +35,7 @@ ENV_DIR_MAP = {
     "Hopper": "Hopper-v5-ensemble",
     "Walker2d": "walker2d",
     "HalfCheetah": "halfcheetah-1st",
-    "Ant": "ant-v5",
+    "Ant": "ant-v4",
 }
 
 # 以下维度在加载数据后自动推断，此处仅为默认占位
