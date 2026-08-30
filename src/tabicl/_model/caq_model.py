@@ -35,6 +35,7 @@ class CAQTabICL(nn.Module):
         freeze_col_embedder: bool = True,
         freeze_native_blocks: bool = False,
         freeze_icl: bool = False,
+        target_aware: bool = False,
     ):
         """
         Args:
@@ -43,6 +44,8 @@ class CAQTabICL(nn.Module):
             freeze_col_embedder: 是否冻结 ColEmbedding 参数
             freeze_native_blocks: 是否冻结原生 RowInteraction Block 参数
             freeze_icl: 是否冻结 ICLearning 参数
+            target_aware: 是否启用 ColEmbedding 的 target-aware y 条件嵌入
+                （预训练原生设置；开启时训练步需逐维 y 条件批处理）
         """
         super().__init__()
 
@@ -50,10 +53,14 @@ class CAQTabICL(nn.Module):
         self.max_classes = pretrained_tabicl.max_classes
         self.num_quantiles = pretrained_tabicl.num_quantiles
         self.embed_dim = pretrained_tabicl.embed_dim
+        self.action_dim = action_dim  # 用于 X_action=None 时构造零动作
 
         # Stage 1: ColEmbedding（保持预训练权重）
         self.col_embedder = pretrained_tabicl.col_embedder
-        self.col_embedder.target_aware = False  # 关闭 target-aware，使 CLS token 与 y 无关，支持并行训练
+        # 默认关闭 target-aware（共享嵌入并行训练需要 CLS 与 y 无关）；
+        # 开启时恢复预训练原生的 y 条件嵌入（评估实验证实其必不可少，
+        # 关闭时冻结 ICL 的输入形态与预训练不匹配，Ant 劣化 9 倍）
+        self.col_embedder.target_aware = target_aware
         if freeze_col_embedder:
             for p in self.col_embedder.parameters():
                 p.requires_grad = False
@@ -129,8 +136,8 @@ class CAQTabICL(nn.Module):
     def forward(
         self,
         X_state: Tensor,
-        X_action: Tensor,
-        y_train: Tensor,
+        X_action: Optional[Tensor] = None,
+        y_train: Optional[Tensor] = None,
         d: Optional[Tensor] = None,
         embed_with_test: bool = False,
     ) -> Tensor:
@@ -138,7 +145,9 @@ class CAQTabICL(nn.Module):
 
         Args:
             X_state:  (B, T, state_dim) - 状态特征
-            X_action: (B, T, action_dim) - 动作特征
+            X_action: (B, T, action_dim) - 动作特征。若为 None（SCM 模式），
+                      自动构造零动作：零初始化保证 a_emb ≈ 0，CAQ 模块退化为
+                      原生 RowInteraction 行为，用于 SCM replay 防遗忘。
             y_train:  (B, train_size) - 训练标签
             d:         可选，每张表的实际特征数
             embed_with_test: 如果为真，则允许训练样本在嵌入过程中关注测试样本
@@ -148,6 +157,16 @@ class CAQTabICL(nn.Module):
                        - 回归: out_dim = num_quantiles (999)
                        - 分类: out_dim = max_classes
         """
+        assert y_train is not None, "y_train is required"
+
+        if X_action is None:
+            # SCM 模式：零动作 → ActionEncoder 输出 ≈ 0（零初始化）→
+            # cls_2 ≈ cls_1，CAQ 退化为原生 RowInteraction
+            B, T = X_state.shape[:2]
+            X_action = torch.zeros(
+                B, T, self.action_dim, device=X_state.device, dtype=X_state.dtype
+            )
+
         representations = self._forward_embeddings(
             X_state, X_action, y_train, d, embed_with_test
         )
@@ -208,6 +227,7 @@ def load_caq_model(
     freeze_col_embedder: bool = True,
     freeze_native_blocks: bool = False,
     freeze_icl: bool = False,
+    target_aware: bool = False,
 ) -> CAQTabICL:
     """从预训练 checkpoint 加载 CAQTabICL 模型。
 
@@ -224,6 +244,8 @@ def load_caq_model(
         freeze_col_embedder: 是否冻结 ColEmbedding
         freeze_native_blocks: 是否冻结原生 RowInteraction Blocks
         freeze_icl: 是否冻结 ICLearning
+        target_aware: 是否启用 ColEmbedding 的 target-aware y 条件嵌入
+            （默认 False 保持旧 checkpoint 兼容；开启时训练步需逐维 y 条件批处理）
 
     Returns:
         CAQTabICL 模型实例，已加载到目标设备
@@ -250,6 +272,7 @@ def load_caq_model(
         freeze_col_embedder=freeze_col_embedder,
         freeze_native_blocks=freeze_native_blocks,
         freeze_icl=freeze_icl,
+        target_aware=target_aware,
     )
 
     model.to(device)
