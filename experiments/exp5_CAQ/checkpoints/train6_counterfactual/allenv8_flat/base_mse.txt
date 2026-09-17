@@ -1,0 +1,8 @@
+  [Hopper-v4   ] avg MSE=0.001976
+  [Walker2d-v4 ] avg MSE=0.296853
+  [HalfCheetah-v4] avg MSE=0.386132
+  [Ant-v4      ] avg MSE=0.047680
+  [InvertedDoublePendulum-v4] avg MSE=0.005211
+  [InvertedPendulum-v4] avg MSE=0.000834
+  [Reacher-v4  ] avg MSE=0.001283
+  [Swimmer-v4  ] avg MSE=0.001377
