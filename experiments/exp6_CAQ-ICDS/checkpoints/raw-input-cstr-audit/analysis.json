@@ -1,0 +1,235 @@
+{
+  "comparisons": [
+    {
+      "comparison": "caq - official_raw",
+      "context": 128,
+      "mean_difference": -0.02855366788539954,
+      "relative_mse_reduction": 0.3654105734474168,
+      "world_bootstrap_95_ci": [
+        -0.058914450348659754,
+        -0.00035195417593338534
+      ],
+      "world_count": 6,
+      "worlds_won": 4
+    },
+    {
+      "comparison": "caq - official_typed",
+      "context": 128,
+      "mean_difference": -0.008983202906765563,
+      "relative_mse_reduction": 0.15337323493064947,
+      "world_bootstrap_95_ci": [
+        -0.02195844891838225,
+        -0.0004659200670261595
+      ],
+      "world_count": 6,
+      "worlds_won": 4
+    },
+    {
+      "comparison": "caq - tabicl_ft",
+      "context": 128,
+      "mean_difference": -0.02204673069128416,
+      "relative_mse_reduction": 0.3077674019017054,
+      "world_bootstrap_95_ci": [
+        -0.05644962544993007,
+        -0.00010671168649942105
+      ],
+      "world_count": 6,
+      "worlds_won": 4
+    },
+    {
+      "comparison": "caq - ridge_raw",
+      "context": 128,
+      "mean_difference": -0.49697708302066773,
+      "relative_mse_reduction": 0.9092739483106624,
+      "world_bootstrap_95_ci": [
+        -1.2277923035191056,
+        -0.001783109085338918
+      ],
+      "world_count": 6,
+      "worlds_won": 4
+    },
+    {
+      "comparison": "caq - boosting_raw",
+      "context": 128,
+      "mean_difference": -0.23394079104535112,
+      "relative_mse_reduction": 0.8251051672601964,
+      "world_bootstrap_95_ci": [
+        -0.48099030319208597,
+        -0.0054011234029704884
+      ],
+      "world_count": 6,
+      "worlds_won": 6
+    },
+    {
+      "comparison": "caq - official_raw",
+      "context": 512,
+      "mean_difference": -0.012023932105918558,
+      "relative_mse_reduction": 0.7749157745364806,
+      "world_bootstrap_95_ci": [
+        -0.028955048084857268,
+        -0.001849339417092517
+      ],
+      "world_count": 6,
+      "worlds_won": 6
+    },
+    {
+      "comparison": "caq - official_typed",
+      "context": 512,
+      "mean_difference": -0.0032297644878547583,
+      "relative_mse_reduction": 0.4804574336635796,
+      "world_bootstrap_95_ci": [
+        -0.006320564786997114,
+        -0.00033844821203593117
+      ],
+      "world_count": 6,
+      "worlds_won": 6
+    },
+    {
+      "comparison": "caq - tabicl_ft",
+      "context": 512,
+      "mean_difference": 0.0004960562148739615,
+      "relative_mse_reduction": -0.16554802092426057,
+      "world_bootstrap_95_ci": [
+        -0.00013700132394129573,
+        0.0016091440524895878
+      ],
+      "world_count": 6,
+      "worlds_won": 2
+    },
+    {
+      "comparison": "caq - ridge_raw",
+      "context": 512,
+      "mean_difference": -0.2152750658344004,
+      "relative_mse_reduction": 0.9840355438599502,
+      "world_bootstrap_95_ci": [
+        -0.5479676933698644,
+        -0.02136951338172577
+      ],
+      "world_count": 6,
+      "worlds_won": 5
+    },
+    {
+      "comparison": "caq - boosting_raw",
+      "context": 512,
+      "mean_difference": -0.14823508612338065,
+      "relative_mse_reduction": 0.9769817390395649,
+      "world_bootstrap_95_ci": [
+        -0.2957506842461282,
+        -0.011680664373980154
+      ],
+      "world_count": 6,
+      "worlds_won": 6
+    },
+    {
+      "comparison": "caq - official_raw",
+      "context": 960,
+      "mean_difference": -0.01737857875056763,
+      "relative_mse_reduction": 0.9036769802793353,
+      "world_bootstrap_95_ci": [
+        -0.0363938664510124,
+        -0.0018673992839772493
+      ],
+      "world_count": 6,
+      "worlds_won": 6
+    },
+    {
+      "comparison": "caq - official_typed",
+      "context": 960,
+      "mean_difference": -0.006822864516882372,
+      "relative_mse_reduction": 0.7864747795715903,
+      "world_bootstrap_95_ci": [
+        -0.018037942495766464,
+        -0.0001443727141127067
+      ],
+      "world_count": 6,
+      "worlds_won": 6
+    },
+    {
+      "comparison": "caq - tabicl_ft",
+      "context": 960,
+      "mean_difference": 0.0005819647459113618,
+      "relative_mse_reduction": -0.4580885712391478,
+      "world_bootstrap_95_ci": [
+        -0.00036530758739249466,
+        0.0021252928529755123
+      ],
+      "world_count": 6,
+      "worlds_won": 4
+    },
+    {
+      "comparison": "caq - ridge_raw",
+      "context": 960,
+      "mean_difference": -0.17080537372149054,
+      "relative_mse_reduction": 0.9892713512152176,
+      "world_bootstrap_95_ci": [
+        -0.34886142456857816,
+        -0.0031990922571204262
+      ],
+      "world_count": 6,
+      "worlds_won": 6
+    },
+    {
+      "comparison": "caq - boosting_raw",
+      "context": 960,
+      "mean_difference": -0.17962251734219722,
+      "relative_mse_reduction": 0.989792613584056,
+      "world_bootstrap_95_ci": [
+        -0.38701364171117675,
+        -0.01492808491500147
+      ],
+      "world_count": 6,
+      "worlds_won": 6
+    }
+  ],
+  "note": "Paired bootstrap over six parameter worlds after averaging support draws; one training seed and one external mechanism, not broad significance evidence.",
+  "physical_rmse": [
+    {
+      "context": 960,
+      "mean_task_rmse": [
+        0.00015975498235574668,
+        0.030442804275284095
+      ],
+      "model": "caq",
+      "units": [
+        "mol/L",
+        "K"
+      ]
+    },
+    {
+      "context": 960,
+      "mean_task_rmse": [
+        0.00017546547968951454,
+        0.02948333098791661
+      ],
+      "model": "tabicl_ft",
+      "units": [
+        "mol/L",
+        "K"
+      ]
+    },
+    {
+      "context": 960,
+      "mean_task_rmse": [
+        0.000742988094612511,
+        0.11949860500246376
+      ],
+      "model": "official_raw",
+      "units": [
+        "mol/L",
+        "K"
+      ]
+    },
+    {
+      "context": 960,
+      "mean_task_rmse": [
+        0.0006998222228804691,
+        0.07431754877290062
+      ],
+      "model": "official_typed",
+      "units": [
+        "mol/L",
+        "K"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "completed_models": [
+    "caq",
+    "tabicl_ft",
+    "tabicl_official_zero_shot"
+  ],
+  "status": "completed"
+}

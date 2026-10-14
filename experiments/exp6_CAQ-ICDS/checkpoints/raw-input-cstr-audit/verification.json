@@ -1,0 +1,44 @@
+{
+  "cstr": {
+    "all_metrics_and_aggregates_verified": true,
+    "exact_query_and_label_match": true,
+    "predictions_recomputed": true,
+    "raw_input_and_row_hashes_verified": true,
+    "records": 378,
+    "source_and_checkpoint_hashes_verified": true,
+    "tasks": 54
+  },
+  "cstr_reference_check": {
+    "checks": 18,
+    "max_normalized_error": 1.1368683772161603e-13,
+    "upstream_commit": "d26cbc0690024efef488dc6a304d37654934e525",
+    "upstream_source_sha256": "e70505e3fa8e657abbfaeeed458940c6999a5ea48748a12cecea18c72b943778"
+  },
+  "icds": {
+    "all_metrics_and_aggregates_verified": true,
+    "exact_query_and_label_match": true,
+    "predictions_recomputed": true,
+    "raw_input_and_row_hashes_verified": true,
+    "records": 182,
+    "source_and_checkpoint_hashes_verified": true,
+    "tasks": 26
+  },
+  "legacy_reproduction": {
+    "caq": {
+      "absolute_difference": 0.0,
+      "current": 0.17699362356359835,
+      "previous": 0.17699362356359835
+    },
+    "official_typed": {
+      "absolute_difference": 4.917291374084698e-08,
+      "current": 6.565050194803548,
+      "previous": 6.5650502439764615
+    },
+    "tabicl_ft": {
+      "absolute_difference": 0.0,
+      "current": 0.17965356051607395,
+      "previous": 0.17965356051607395
+    }
+  },
+  "status": "passed"
+}

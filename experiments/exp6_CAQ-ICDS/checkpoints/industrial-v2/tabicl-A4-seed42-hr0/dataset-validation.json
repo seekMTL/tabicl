@@ -1,0 +1,15 @@
+{
+  "branch_replay_rows": 10872,
+  "independent_reference_checks": 2888,
+  "level": "full",
+  "max_normalized_reference_error": 6.685495376586914e-07,
+  "max_proven_zero_effect": 0.0,
+  "max_reference_normalized_storage_replay_error": 0.0062310836553573605,
+  "max_storage_replay_error": 62.31083655357361,
+  "proven_zero_checks": 4039,
+  "rows": 1834294,
+  "same_action_replays": 2718,
+  "status": "passed",
+  "storage_error_note": "Raw maximum mixes units; tank energy is in J. Use reference-normalized errors or per-target units.",
+  "worlds": 512
+}

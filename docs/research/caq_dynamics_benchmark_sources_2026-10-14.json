@@ -1,0 +1,317 @@
+{
+  "researched_on": "2026-10-14",
+  "scope": "Action-conditioned industrial dynamics prediction; proposed benchmark, not a completed evaluation",
+  "source_status": "Primary-source review; only DaISy dryer and glass-furnace data were downloaded and parsed; no model evaluations",
+  "candidates": [
+    {
+      "id": "pcgym_extraction",
+      "priority": "P0",
+      "track": "full_state_simulation",
+      "name": "Multistage extraction",
+      "state_dim": 10,
+      "action_dim": 2,
+      "source_kind": "simulation",
+      "url": "https://maximilianb2.github.io/pc-gym/env/extraction-column/",
+      "code": "https://github.com/MaximilianB2/pc-gym",
+      "notes": "New external equation relative to ICDS templates; verify nominal bounds and units from code and original reference; Gym observation may contain setpoints."
+    },
+    {
+      "id": "pcgym_distillation",
+      "priority": "P0",
+      "track": "full_state_simulation",
+      "name": "Distillation column",
+      "state_dim": 9,
+      "action_dim": 2,
+      "source_kind": "simulation",
+      "url": "https://maximilianb2.github.io/pc-gym/API/model_classes/",
+      "code": "https://github.com/MaximilianB2/pc-gym",
+      "notes": "Candidate source code identifies R,F inputs; integration and physical validity need preflight."
+    },
+    {
+      "id": "pcgym_recycle",
+      "priority": "P0",
+      "track": "full_state_simulation",
+      "name": "CSTR series with recycle",
+      "state_dim": 4,
+      "action_dim": 4,
+      "source_kind": "simulation",
+      "url": "https://maximilianb2.github.io/pc-gym/API/model_classes/",
+      "code": "https://github.com/MaximilianB2/pc-gym",
+      "notes": "Distinct equation from single CSTR; reactor source family has prior development exposure, so not a completely unseen source."
+    },
+    {
+      "id": "pcgym_photoproduction",
+      "priority": "P0",
+      "track": "full_state_simulation",
+      "name": "Photoproduction",
+      "state_dim": 3,
+      "action_dim": 2,
+      "source_kind": "simulation",
+      "url": "https://maximilianb2.github.io/pc-gym/env/photoproduction/",
+      "code": "https://github.com/MaximilianB2/pc-gym",
+      "notes": "Light intensity and nitrate feed; qualify as bioprocess simulation, not factory measurement."
+    },
+    {
+      "id": "daisy_dryer",
+      "priority": "P0",
+      "track": "observed_history_measurements",
+      "name": "Industrial dryer",
+      "observation_dim": 3,
+      "input_dim": 3,
+      "rows": 867,
+      "source_kind": "industrial_measurement",
+      "url": "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/dryer2.txt",
+      "download_url": "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/dryer2.dat.gz",
+      "verified": {
+        "downloaded": true,
+        "parsed_rows": 867,
+        "columns": 7,
+        "all_finite": true,
+        "sha256": "0000546d78f737a8a33bf91ae62235fa8848a730b660ef1a25a4fda12d3b064f"
+      },
+      "notes": "10-second sampling; determine which input channels are controllable versus operating conditions; chronological split required; redistribution license not confirmed."
+    },
+    {
+      "id": "daisy_glass",
+      "priority": "P0",
+      "track": "observed_history_measurements",
+      "name": "Philips glass furnace",
+      "observation_dim": 6,
+      "input_dim": 3,
+      "rows": 1247,
+      "source_kind": "industrial_measurement",
+      "url": "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/glassfurnace.txt",
+      "download_url": "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/glassfurnace.dat.gz",
+      "verified": {
+        "downloaded": true,
+        "parsed_rows": 1247,
+        "columns": 10,
+        "all_finite": true,
+        "sha256": "61d1693a2d379a9fcf6edf2f474496d5a92eef4f193119265b477f6e58f6e657"
+      },
+      "notes": "Three heating/cooling inputs; six temperature outputs; physical sampling time absent in description, inspect original records; redistribution license not confirmed."
+    },
+    {
+      "id": "emps",
+      "priority": "P0",
+      "track": "observed_history_measurements",
+      "name": "Electro-mechanical positioning system",
+      "observation_dim": 1,
+      "action_dim": 1,
+      "source_kind": "laboratory_measurement",
+      "url": "https://sites.google.com/view/nonlinear-benchmark/benchmarks/emps",
+      "loader": "https://github.com/MaartenSchoukens/nonlinear_benchmarks",
+      "notes": "Use applied force vir, not reference position as a substitute; closed-loop collection; official train/test and initialization window."
+    },
+    {
+      "id": "cascaded_tanks",
+      "priority": "P0",
+      "track": "observed_history_measurements",
+      "name": "Cascaded tanks with overflow",
+      "observation_dim": 1,
+      "action_dim": 1,
+      "source_kind": "laboratory_measurement",
+      "url": "https://www.nonlinearbenchmark.org/benchmarks/cascaded-tanks",
+      "loader": "https://github.com/MaartenSchoukens/nonlinear_benchmarks",
+      "notes": "Pump actuation to measured water level; missing internal tank state requires history; tank mechanism resembles ICDS but measurement/source differs."
+    },
+    {
+      "id": "silverbox",
+      "priority": "P0_extension",
+      "track": "observed_history_measurements",
+      "name": "Silverbox",
+      "observation_dim": 1,
+      "action_dim": 1,
+      "source_kind": "laboratory_measurement",
+      "url": "https://www.nonlinearbenchmark.org/benchmarks/silverbox",
+      "loader": "https://github.com/MaartenSchoukens/nonlinear_benchmarks",
+      "notes": "Electronic Duffing analogue; separate official multisine and increasing-amplitude tests; do not count test subsets as independent systems."
+    },
+    {
+      "id": "wiener_hammerstein",
+      "priority": "P0_extension",
+      "track": "observed_history_measurements",
+      "name": "Wiener-Hammerstein",
+      "observation_dim": 1,
+      "action_dim": 1,
+      "source_kind": "laboratory_measurement",
+      "url": "https://www.nonlinearbenchmark.org/benchmarks/wiener-hammerstein",
+      "loader": "https://github.com/MaartenSchoukens/nonlinear_benchmarks",
+      "notes": "Dynamic linear-nonlinear-linear cascade; official IFAC SYSID benchmark; sequential history required."
+    },
+    {
+      "id": "industrial_robot",
+      "priority": "P1",
+      "track": "observed_history_measurements",
+      "name": "KUKA industrial robot",
+      "observation_dim": 6,
+      "input_dim": 6,
+      "source_kind": "industrial_robot_measurement",
+      "url": "https://sites.google.com/view/nonlinear-benchmark/benchmarks/industrial-robot",
+      "report": "https://www.dfki.de/en/web/research/projects-and-publications/publication/15661",
+      "notes": "Report read; prepared forward dataset is motor torque and position, raw velocity information is additional; 39988 train and 3636 test points, 100ms; report measured torque estimated from current; not a full-state dataset by default."
+    },
+    {
+      "id": "coupled_drives",
+      "priority": "P1",
+      "track": "observed_history_measurements",
+      "name": "Coupled electric drives",
+      "source_kind": "laboratory_measurement",
+      "url": "https://www.nonlinearbenchmark.org/benchmarks/coupled-electric-drives",
+      "notes": "Technical report Uppsala 2017; absolute speed measurement loses sign; short records constrain context lengths."
+    },
+    {
+      "id": "daisy_exchanger",
+      "priority": "P1",
+      "track": "observed_history_measurements",
+      "name": "Liquid-saturated steam heat exchanger",
+      "observation_dim": 1,
+      "action_dim": 1,
+      "rows": 4000,
+      "source_kind": "process_measurement",
+      "url": "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/exchanger.txt",
+      "notes": "Liquid flow controls outlet temperature; other inlet quantities held fixed; 1-second sampling; related mechanism already present in ICDS."
+    },
+    {
+      "id": "parallel_wh",
+      "priority": "P1",
+      "track": "observed_history_measurements",
+      "name": "Parallel Wiener-Hammerstein",
+      "source_kind": "laboratory_measurement",
+      "url": "https://www.nonlinearbenchmark.org/benchmarks/parallel-wiener-hammerstein",
+      "notes": "Automatica 2015 source; amplitude extrapolation; same broad family as WH, keep group relationship."
+    },
+    {
+      "id": "fine_steering_mirror",
+      "priority": "P1",
+      "track": "observed_history_measurements",
+      "name": "CubeSpec fine steering mirror",
+      "input_dim": 3,
+      "observation_dim": 3,
+      "source_kind": "laboratory_measurement",
+      "url": "https://www.nonlinearbenchmark.org/benchmarks/fine-steering-mirror",
+      "code": "https://github.com/merijnfloren/fsm-benchmark-data",
+      "notes": "ISMA-USD2024; three actuator voltages and three displacements; periodic multisines at three amplitudes, no transients; not a manufacturing-factory dataset."
+    },
+    {
+      "id": "pcgym_polymerisation",
+      "priority": "P1",
+      "track": "full_state_simulation",
+      "name": "Polymerisation reactor",
+      "state_dim": 3,
+      "action_dim": 4,
+      "source_kind": "simulation",
+      "url": "https://maximilianb2.github.io/pc-gym/API/model_classes/",
+      "notes": "T,M,I states; F,Tf,Mf,If inputs; original reference and validity bounds need audit."
+    },
+    {
+      "id": "pcgym_crystallization",
+      "priority": "P1",
+      "track": "full_state_simulation",
+      "name": "Crystallization",
+      "state_dim": 7,
+      "action_dim": 1,
+      "source_kind": "simulation",
+      "url": "https://maximilianb2.github.io/pc-gym/API/model_classes/",
+      "reference": "https://pubs.acs.org/doi/10.1021/acs.iecr.3c00739",
+      "notes": "Code returns 7 components but 5 moment/concentration states drive RHS; CV and Ln are derived quantities; audit redundancy and initial conditions before use."
+    },
+    {
+      "id": "siemens_ib",
+      "priority": "P1",
+      "track": "observed_history_simulation",
+      "name": "Siemens Industrial Benchmark",
+      "action_dim": 3,
+      "source_kind": "industrial_motivated_simulation",
+      "url": "https://github.com/siemens/industrialbenchmark",
+      "paper": "https://openreview.net/pdf?id=rFJtculICOg",
+      "notes": "IEEE SSCI2017; partial observation, delays and heteroskedasticity; not measured factory data; history track required."
+    },
+    {
+      "id": "neorl2",
+      "priority": "P1",
+      "track": "observed_history_simulation",
+      "name": "NeoRL-2 Pipeline/DMSD/Fusion",
+      "source_kind": "simulation",
+      "url": "https://github.com/polixir/NeoRL2",
+      "paper": "https://arxiv.org/abs/2503.19267",
+      "notes": "2025 preprint as verified; seven simulated tasks; transition tuple API and simulators; validate observation Markovness, hidden actuator states and data licenses per task."
+    },
+    {
+      "id": "boptest",
+      "priority": "P2",
+      "track": "observed_history_simulation",
+      "name": "BOPTEST building HVAC",
+      "source_kind": "simulation",
+      "url": "https://www.energy.gov/cmei/buildings/boptest-building-operations-testing-framework",
+      "code": "https://github.com/ibpsa/project1-boptest",
+      "paper": "https://doi.org/10.1080/19401493.2021.1986574",
+      "notes": "DOE/LBNL report and JBPS2021; actual actuator points and weather disturbances; container/FMU setup and hidden thermal state make it slower for MVP."
+    },
+    {
+      "id": "tep",
+      "priority": "P2",
+      "track": "observed_history_simulation",
+      "name": "Tennessee Eastman process",
+      "source_kind": "simulation",
+      "url": "https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/6C3JR1",
+      "notes": "Public fault-detection variant is not automatically an action-conditioned dynamics benchmark; inspect manipulated-variable availability and excitation; not real factory data."
+    },
+    {
+      "id": "pdebench",
+      "priority": "reference_only",
+      "track": "spatial_fields",
+      "name": "PDEBench",
+      "source_kind": "simulation",
+      "url": "https://proceedings.neurips.cc/paper_files/paper/2022/hash/0a9747136d411fb83f0cf81820d44afb-Abstract-Datasets_and_Benchmarks.html",
+      "code": "https://github.com/pdebench/PDEBench",
+      "notes": "NeurIPS2022; borrow multi-step and physics metrics; spatial-field interface and lack of a common actuator task make it unsuitable for first CAQ release."
+    }
+  ],
+  "methodological_references": [
+    {
+      "name": "DynaDojo",
+      "venue": "NeurIPS 2023 Datasets and Benchmarks",
+      "url": "https://proceedings.neurips.cc/paper_files/paper/2023/file/32093649cbbcff773d9a991d8c30a7fe-Paper-Datasets_and_Benchmarks.pdf",
+      "lesson": "Vary context/sample size, system complexity and OOD; source generator and challenge API are separate."
+    },
+    {
+      "name": "PC-Gym",
+      "venue": "Computers & Chemical Engineering 204 (2026), 109363",
+      "url": "https://www.sciencedirect.com/science/article/pii/S0098135425003667",
+      "lesson": "Reuse independently sourced process equations, not RL return as the dynamics score."
+    },
+    {
+      "name": "Deep subspace encoders / SUBNET",
+      "venue": "Automatica 156 (2023), 111210; earlier L4DC work",
+      "url": "https://www.sciencedirect.com/science/article/pii/S0005109823003710",
+      "code": "https://github.com/GerbenBeintema/deepSI",
+      "lesson": "Use a proper history-to-hidden-state dynamics baseline on input-output datasets."
+    },
+    {
+      "name": "From system models to class models",
+      "venue": "IEEE Control Systems Letters 7 (2023), 3513–3518",
+      "url": "https://doi.org/10.1109/LCSYS.2023.3335036",
+      "code": "https://github.com/forgi86/sysid-transformers",
+      "lesson": "Direct ICL system-identification comparator; the released family/schema must be matched to each target task."
+    },
+    {
+      "name": "Dynamics as Prompts / CAPTURE",
+      "venue": "IEEE Robotics and Automation Letters; year/version should follow final DOI",
+      "url": "https://github.com/XilunZhangRobo/CAPTURE-Sim2Real",
+      "lesson": "Relevant sim-to-real ICL dynamics work; do not assume its robot-specific checkpoint handles arbitrary process schemas."
+    },
+    {
+      "name": "Parallel Wiener-Hammerstein identification",
+      "venue": "Automatica 51 (2015), 111–122",
+      "url": "https://doi.org/10.1016/j.automatica.2014.10.105",
+      "lesson": "Real controlled nonlinear response data with amplitude tests."
+    },
+    {
+      "name": "Industrial dryer system identification",
+      "venue": "IEEE Transactions on Automatic Control 42(7) (1997), 956–974, cited by dataset card",
+      "url": "https://ftp.esat.kuleuven.be/pub/SISTA/data/process_industry/dryer2.txt",
+      "lesson": "Industrial measurements with control-relevant inputs and multivariate outputs."
+    }
+  ]
+}

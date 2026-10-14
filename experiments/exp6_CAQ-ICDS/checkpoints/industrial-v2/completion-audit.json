@@ -1,0 +1,17 @@
+{
+  "models": {
+    "caq": {
+      "completed": true,
+      "pid": 2664909,
+      "running": false,
+      "step": 30000
+    },
+    "tabicl": {
+      "completed": true,
+      "pid": 2664943,
+      "running": false,
+      "step": 30000
+    }
+  },
+  "status": "passed"
+}

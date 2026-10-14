@@ -1,0 +1,143 @@
+{
+  "best_scenario_comparison": {
+    "abstract_discrete": {
+      "caq": 0.002108104053195456,
+      "caq_relative_reduction": -0.24229683610205144,
+      "tabicl_ft": 0.0016969406923791606
+    },
+    "coupled_tanks": {
+      "caq": 0.06229467350296677,
+      "caq_relative_reduction": -1.7083831499418611,
+      "tabicl_ft": 0.02300068714587299
+    },
+    "dc_motor": {
+      "caq": 0.011339856140748332,
+      "caq_relative_reduction": -0.1329404085037984,
+      "tabicl_ft": 0.010009225600598139
+    },
+    "heat_exchanger": {
+      "caq": 0.02187183654975466,
+      "caq_relative_reduction": -0.20346803388890544,
+      "tabicl_ft": 0.018174007064464908
+    },
+    "heated_tank": {
+      "caq": 3.0851765475717414,
+      "caq_relative_reduction": 0.6446472847659979,
+      "tabicl_ft": 8.68201202723365
+    },
+    "mass_spring": {
+      "caq": 0.009393656339839377,
+      "caq_relative_reduction": 0.31255761550470174,
+      "tabicl_ft": 0.01366464528767156
+    },
+    "production_line": {
+      "caq": 4.462085767385833,
+      "caq_relative_reduction": -4.339465675442547,
+      "tabicl_ft": 0.8356802044646546
+    },
+    "thermal": {
+      "caq": 0.0062042026805266695,
+      "caq_relative_reduction": -1.340861510275237,
+      "tabicl_ft": 0.0026503928802679077
+    }
+  },
+  "caq_best_relative_reduction": 0.2535844228935782,
+  "limitations": [
+    "One training seed; internal held-out parameter worlds, not unseen prototype transfer.",
+    "Do not compare old/new overall scores directly: prototype mix and held-out worlds differ.",
+    "Short-run results are only integration checks, not final performance evidence."
+  ],
+  "metric": "World/target macro MSE normalized by unchanged public physical reference scales",
+  "phase": "smoke",
+  "runs": {
+    "caq": {
+      "before_mse": 31.801453286989403,
+      "best_families": {
+        "discrete": 0.002108104053195456,
+        "hybrid_line": 4.462085767385833,
+        "physical_ode": 0.6640175614882304
+      },
+      "best_mse": 1.0861927776274223,
+      "best_scenarios": {
+        "abstract_discrete": 0.002108104053195456,
+        "coupled_tanks": 0.06229467350296677,
+        "dc_motor": 0.011339856140748332,
+        "heat_exchanger": 0.02187183654975466,
+        "heated_tank": 3.0851765475717414,
+        "mass_spring": 0.009393656339839377,
+        "production_line": 4.462085767385833,
+        "thermal": 0.0062042026805266695
+      },
+      "best_step": 100,
+      "elapsed_seconds": 268.72738829348236,
+      "final_families": {
+        "discrete": 0.0013250145065709029,
+        "hybrid_line": 2.697551668508123,
+        "physical_ode": 1.2775165821375938
+      },
+      "final_mse": 1.2968801327371429,
+      "final_scenarios": {
+        "abstract_discrete": 0.0013250145065709029,
+        "coupled_tanks": 0.051287739056765765,
+        "dc_motor": 0.01657055936585915,
+        "heat_exchanger": 0.01250383240188275,
+        "heated_tank": 6.013684035230771,
+        "mass_spring": 0.008809748645293035,
+        "production_line": 2.697551668508123,
+        "thermal": 0.0013901988136037586
+      },
+      "industrial_task_sequence_sha256": "88029dffcb3c4de571cc1b82e18fab2078635bb14059eaeb32860163b11a31a3",
+      "peak_allocated_bytes": 7841610752,
+      "peak_reserved_bytes": 11347689472,
+      "scm_mse_after": 0.864592432975769,
+      "scm_mse_before": 0.8971965909004211,
+      "successful_updates": 200,
+      "wall_elapsed_seconds": 337.8369766296819
+    },
+    "tabicl": {
+      "before_mse": 8.733504136033451,
+      "best_families": {
+        "discrete": 0.0016969406923791606,
+        "hybrid_line": 0.8356802044646546,
+        "physical_ode": 1.837088819073786
+      },
+      "best_mse": 1.4552118296327516,
+      "best_scenarios": {
+        "abstract_discrete": 0.0016969406923791606,
+        "coupled_tanks": 0.02300068714587299,
+        "dc_motor": 0.010009225600598139,
+        "heat_exchanger": 0.018174007064464908,
+        "heated_tank": 8.68201202723365,
+        "mass_spring": 0.01366464528767156,
+        "production_line": 0.8356802044646546,
+        "thermal": 0.0026503928802679077
+      },
+      "best_step": 200,
+      "elapsed_seconds": 260.593081000261,
+      "final_families": {
+        "discrete": 0.0016969406923791606,
+        "hybrid_line": 0.8356802044646546,
+        "physical_ode": 1.837088819073786
+      },
+      "final_mse": 1.4552118296327516,
+      "final_scenarios": {
+        "abstract_discrete": 0.0016969406923791606,
+        "coupled_tanks": 0.02300068714587299,
+        "dc_motor": 0.010009225600598139,
+        "heat_exchanger": 0.018174007064464908,
+        "heated_tank": 8.68201202723365,
+        "mass_spring": 0.01366464528767156,
+        "production_line": 0.8356802044646546,
+        "thermal": 0.0026503928802679077
+      },
+      "industrial_task_sequence_sha256": "88029dffcb3c4de571cc1b82e18fab2078635bb14059eaeb32860163b11a31a3",
+      "peak_allocated_bytes": 8010063872,
+      "peak_reserved_bytes": 11318329344,
+      "scm_mse_after": 0.8617902398109436,
+      "scm_mse_before": 0.8971350193023682,
+      "successful_updates": 200,
+      "wall_elapsed_seconds": 327.4253991134465
+    }
+  },
+  "status": "verified_completed"
+}

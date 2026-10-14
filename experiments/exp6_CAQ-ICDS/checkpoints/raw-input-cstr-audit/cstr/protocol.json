@@ -1,0 +1,57 @@
+{
+  "arguments": {
+    "contexts": [
+      128,
+      512,
+      960
+    ],
+    "device": "cuda:1",
+    "estimators": 8,
+    "models": [
+      "official_raw",
+      "official_typed",
+      "caq",
+      "tabicl_ft",
+      "ridge_raw",
+      "boosting_raw",
+      "persistence"
+    ],
+    "out": "/home/lizitao/project/tabicl/experiments/exp6_CAQ-ICDS/checkpoints/raw-input-cstr-audit/cstr",
+    "query_size": 256,
+    "resume": false,
+    "suite": "cstr",
+    "support_seeds": [
+      42,
+      43,
+      44
+    ]
+  },
+  "checkpoints": {
+    "/home/lizitao/project/mbpo_pyt_tabpfn/ckpt/tabiclv2/tabicl-regressor-v2-20260212.ckpt": "0db9cb538f114e79026bf08f45f41ad8dd7ad2de2aaca9a5ca8cd3bd9748ae7a",
+    "/home/lizitao/project/tabicl/experiments/exp6_CAQ-ICDS/checkpoints/paper-main/caq-A4-seed42-hr0/best.pt": "9d7316b00af284026a92cd6e3fc16fecda59cec467ad7c22191600921d256bdd",
+    "/home/lizitao/project/tabicl/experiments/exp6_CAQ-ICDS/checkpoints/paper-main/tabicl-A4-seed42-hr0/best.pt": "743ec08c1f2b8a95b9deb5bedec4263310c5604d67068e128ccb60b7f1c32473"
+  },
+  "manifest": "/home/lizitao/project/Industrial_synthetic_data/data/external-m4-v2/manifest.json",
+  "manifest_sha256": "4d3246ff7dfc73f28c6c2e496770bb3dada9d1010a40a8120329253b3f07cbb2",
+  "notes": [
+    "No weight updates to neural models.",
+    "Raw target uses physical delta (or next value for ICDS count/binary); fit sees context only.",
+    "All models share row IDs; neural typed inputs retain their training protocol.",
+    "CSTR is PC-Gym equations with an existing custom rollout harness, not official RL scores.",
+    "CSTR external_val has historical use; development transfer test, not an untouched final test.",
+    "CSTR time feature is converted from .05 minutes to 3 seconds; integration truth unchanged.",
+    "Support repetitions are not independent training seeds."
+  ],
+  "numpy": "2.4.4",
+  "source_hashes": {
+    "/home/lizitao/project/Industrial_synthetic_data/icds/benchmarks/external.py": "60104ba15eb50bb7a784076c7931f37d5c9a8784b54f143aaa01fca5265f0cf7",
+    "/home/lizitao/project/Industrial_synthetic_data/icds/export.py": "65a61166cbdff4ccde2415ebe33721a37c8d7a4d55819692b61b12f1d595a12b",
+    "/home/lizitao/project/tabicl/experiments/exp6_CAQ-ICDS/compare_three.py": "a69f1d1508dd2fb8d280e5ba30d65991a81c06b2c425227db253b61fd86adf51",
+    "/home/lizitao/project/tabicl/experiments/exp6_CAQ-ICDS/eval_raw_and_cstr.py": "57a0ce9721f8832fe0487083dc11f37290312f8dc8a87eb4ab98f81ae29514e3",
+    "/home/lizitao/project/tabicl/experiments/exp6_CAQ-ICDS/industrial_adapter.py": "10f83b8c965367b328f20bfed312d5217f2a17a027888554eb082b13c651cfa5",
+    "/home/lizitao/project/tabicl/experiments/exp6_CAQ-ICDS/industrial_task_sampler.py": "c8a3ba2c26d0a06e39338ef01d08c6bba1db32ad01d7348e58257bb5da1da647",
+    "/home/lizitao/project/tabicl/experiments/exp6_CAQ-ICDS/train_industrial.py": "1974f164f2a54f6982073642c41f7ee37042911baf0bdafba4e2645a67710f19"
+  },
+  "split": "external_val",
+  "torch": "2.11.0+cu128"
+}
